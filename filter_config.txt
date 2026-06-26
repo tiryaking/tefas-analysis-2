@@ -1,0 +1,39 @@
+# TEFAS Analiz Filtre Ayarları
+# ==============================
+# Bu dosyayı düzenleyerek varsayılan filtreleri ayarlayabilirsiniz.
+# Her satıra bir kelime yazın. Boş satırlar ve # ile başlayan satırlar göz ardı edilir.
+
+# ─── DAHİL EDİLECEK KELİMELER (INCLUDE) ───
+# Bu kelimeleri içeren fonlar analize dahil edilir (VEYA mantığı)
+# Örnek: PARA PİYASASI yazan satır, hem "PARA PİYASASI" hem "para piyasası" içeren fonları yakalar
+
+[INCLUDE]
+# PARA PİYASASI
+# BORÇLANMA ARACI
+
+
+# ─── HARİÇ TUTULACAK KELİMELER (EXCLUDE) ───
+# Bu kelimeleri içeren fonlar analizden çıkarılır (VEYA mantığı)
+# Örnek: ALTIN yazan satır, "ALTIN", "Altın", "altın" içeren tüm fonları eler
+
+[EXCLUDE]
+ALTIN
+GÜMÜŞ
+PETROL
+EMTİA
+#SERBEST
+PARA PİYASASI
+BORÇLANMA ARAÇLARI
+ÖZEL FON
+HİSSE SENEDİ
+
+ATLAS PORTFÖY SERBEST FON
+
+
+# ─── KULLANIM NOTU ───
+# 1. # işaretini kaldırarak satırı aktif edin
+# 2. Kendi kelimelerinizi ekleyin
+# 3. Dosyayı kaydedin
+# 4. python run_analysis.py çalıştırın
+# 5. İstendiğinde "d" tuşuna basarak dosyadan yükleyin
+# 6. VEYA manuel olarak girin (dosya göz ardı edilir)
