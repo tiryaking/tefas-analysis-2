@@ -460,14 +460,15 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
     # 7. Metodoloji
     story.append(Paragraph("METODOLOJİ & UYARILAR", styles["Section"]))
     method = [
-        ("Composite Skor", "Sharpe (%30), Sortino (%20), düşük drawdown (%20), 1Y getiri (%20), tutarlılık (%5) ve likidite/AUM (%5) "
-         "eksenlerinin yüzdelik-sıra ağırlıklı bileşimi. Yüzdelik-sıra skorları uç değerlere karşı dayanıklı kılar."),
+        ("Composite Skor", "Sharpe (%25), Sortino (%15), düşük drawdown (%20), 1Y getiri (%25), tutarlılık (%7,5) ve likidite/AUM (%7,5) "
+         "eksenlerinin yüzdelik-sıra ağırlıklı bileşimi. Sharpe ve Sortino yüksek korelasyonlu olduğundan toplam ağırlıkları sınırlandırılmıştır. "
+         "Yüzdelik-sıra skorları uç değerlere karşı dayanıklı kılar."),
         ("Risk-Ayarlı Metrikler", "Sharpe = (Getiri − Rf) / Volatilite; Sortino aşağı yönlü sapmayı; Calmar maksimum drawdown'u esas alır. "
          "Volatilite ve Sortino winsorize edilmiş günlük getirilerle hesaplanır."),
-        ("Treynor & Beta", f"Treynor = (Getiri − Rf) / Beta. Beta eşit-ağırlıklı fon evreni benchmark'ına göre hesaplanır; "
-         f"|Beta| < {config.MIN_BETA_FOR_TREYNOR} olan fonlarda Treynor raporlanmaz."),
         ("Veri Kalitesi", f"Tek günde > %{config.DATA_QUALITY_MAX_DAILY_MOVE:.0f} fiyat hareketi yapan fonlar şüpheli kabul edilip sıralamalardan çıkarılır."),
         ("Reel Getiri", f"Fisher denklemiyle enflasyondan (%{config.INFLATION_RATE:.0f} TÜFE) arındırılmış getiri."),
+        ("Survivorship Bias", "Analiz yalnızca platformda hâlen aktif olan fonları kapsar. Kapanmış, birleşmiş veya tasfiye edilmiş "
+         "fonlar veri setinde bulunmadığından geçmiş performans istatistikleri iyimser yönde sapabilir (survivorship bias)."),
     ]
     for title, body in method:
         story += [Paragraph(title, styles["SubSec"]), Paragraph(body, styles["Body"])]

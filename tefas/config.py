@@ -36,10 +36,6 @@ TRADING_DAYS_PER_YEAR = 252
 DATA_QUALITY_MAX_DAILY_MOVE = 35.0   # tek-günlük mutlak hareket sınırı (%)
 DAILY_RETURN_CLIP = 25.0             # volatilite/Sortino için winsorize bandı (%)
 
-# ─── Beta / Treynor ───────────────────────────────────────────────────────────
-MIN_BETA_FOR_TREYNOR = 0.15
-TREYNOR_CAP = 200.0
-
 # ─── Ücret / stopaj / makro ───────────────────────────────────────────────────
 MANAGEMENT_FEE_RATE = 1.0
 TUFE_RATE = 55.0
@@ -52,10 +48,6 @@ REAL_RETURN_ENABLED = True
 # ─── AUM / yaş ────────────────────────────────────────────────────────────────
 AUM_BONUS_THRESHOLD = 50
 MIN_FUND_AGE_YEARS = None
-
-# ─── Benchmark ────────────────────────────────────────────────────────────────
-# None => eşit-ağırlıklı fon evreni benchmark olarak kullanılır.
-BENCHMARK_CODE = "XU100"
 
 # ─── Rapor / PDF ──────────────────────────────────────────────────────────────
 CONSOLIDATED_REPORT_BASENAME = "tefas_premium_rapor"

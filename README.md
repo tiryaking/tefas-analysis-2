@@ -104,7 +104,7 @@ tefas/
   etl.py           load_combined() -> DataFrame  (dosyaya yazmaz)
   data_quality.py  Saf fonksiyonlar: bozuk seri tespiti, winsorize
   metrics.py       Saf metrik fonksiyonları + compute_metrics()
-  scoring.py       Percentile-rank composite skor, risk profilleri, Alpha/Beta
+  scoring.py       Percentile-rank composite skor, risk profilleri
   report.py        generate(scored_df, metrics_df, ...) -> PDF
   pipeline.py      run(): aşamaları BELLEKTE bağlar, parquet önbellek
   cli.py           Tek `tefas` komutu, alt-komutlar
