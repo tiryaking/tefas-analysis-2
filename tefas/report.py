@@ -75,6 +75,7 @@ def _styles():
     s.add(ParagraphStyle("CellH", fontName=BOLD, fontSize=8, leading=10.5, textColor=colors.white))
     s.add(ParagraphStyle("Rationale", fontName=FONT, fontSize=8, leading=10.5, textColor=colors.HexColor("#33414f")))
     s.add(ParagraphStyle("Disclaimer", fontName=FONT, fontSize=7.5, leading=11, textColor=GREY))
+    s.add(ParagraphStyle("CoverFilter", fontName=FONT, fontSize=7.5, leading=11, alignment=1, textColor=GREY))
     return s
 
 
@@ -229,8 +230,13 @@ def _chart_risk_return(df, highlight_codes, path):
     if len(hl) > 0:
         hl = hl.sort_values("Getiri_1Y", ascending=False).reset_index(drop=True)
         n = len(hl)
-        label_x = x0 + (x1 - x0) * 0.10
-        span_hi, span_lo = y0 + (y1 - y0) * 0.97, y0 + (y1 - y0) * 0.42
+        # Label column must be strictly LEFT of all highlighted points so every
+        # connector line goes left→right; with both labels and dots sorted by
+        # Getiri_1Y descending, this guarantees zero crossings.
+        min_data_x = hl["Yillik_Volatilite"].min()
+        label_x = max(x0, min(x0 + (x1 - x0) * 0.10, min_data_x - 1.0))
+        # Span full chart height so low-return labels don't sit above their dots
+        span_hi, span_lo = y0 + (y1 - y0) * 0.97, y0 + (y1 - y0) * 0.05
         label_ys = np.linspace(span_hi, span_lo, n) if n > 1 else np.array([(span_hi + span_lo) / 2])
         for i, (_, r) in enumerate(hl.iterrows()):
             ax.annotate(str(r["Fon Kodu"]), xy=(r["Yillik_Volatilite"], r["Getiri_1Y"]),
@@ -283,7 +289,9 @@ def _portfolio_expected(portfolio):
 
 def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
              risk_free_rate: float, combined: pd.DataFrame | None = None,
-             out_path: Path | None = None) -> Path:
+             out_path: Path | None = None,
+             include: list[str] | None = None,
+             exclude: list[str] | None = None) -> Path:
     """
     Skorlu + metrik DataFrame'lerden konsolide premium PDF üretir; yolu döndürür.
     `combined` verilirse örnek portföy riski gerçek kovaryanstan hesaplanır (#4).
@@ -307,16 +315,43 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
     story = []
 
     # 1. Kapak
-    story += [Spacer(1, 70 * mm), Paragraph("TEFAS", styles["CoverTitle"]),
-              Paragraph("PREMİUM YATIRIM RAPORU", styles["CoverTitle"]), Spacer(1, 6 * mm),
-              Paragraph(f"{paths.fund_name} Fonları &nbsp;|&nbsp; Kantitatif Analiz, Risk Profilleme & Portföy Önerileri", styles["CoverSub"]),
-              Spacer(1, 14 * mm),
-              Paragraph(f"Rapor Tarihi: {today}<br/>Analiz Edilen Fon Sayısı: {n_funds}<br/>"
-                        f"Risksiz Faiz Oranı (Benchmark): %{risk_free_rate:.1f}<br/>"
-                        f"Enflasyon (TÜFE): %{config.INFLATION_RATE:.0f} &nbsp;|&nbsp; Politika Faizi: %{config.POLICY_RATE:.0f}", styles["CoverInfo"]),
-              Spacer(1, 26 * mm),
-              Paragraph("Bu rapor kantitatif modellere dayanır ve yatırım tavsiyesi değildir.", styles["Disclaimer"]),
-              PageBreak()]
+    cover_items = [
+        Spacer(1, 70 * mm), Paragraph("TEFAS", styles["CoverTitle"]),
+        Paragraph("PREMİUM YATIRIM RAPORU", styles["CoverTitle"]), Spacer(1, 6 * mm),
+        Paragraph(f"{paths.fund_name} Fonları &nbsp;|&nbsp; Kantitatif Analiz, Risk Profilleme & Portföy Önerileri", styles["CoverSub"]),
+        Spacer(1, 14 * mm),
+        Paragraph(f"Rapor Tarihi: {today}<br/>Analiz Edilen Fon Sayısı: {n_funds}<br/>"
+                  f"Risksiz Faiz Oranı (Benchmark): %{risk_free_rate:.1f}<br/>"
+                  f"Enflasyon (TÜFE): %{config.INFLATION_RATE:.0f} &nbsp;|&nbsp; Politika Faizi: %{config.POLICY_RATE:.0f}", styles["CoverInfo"]),
+        Spacer(1, 8 * mm),
+    ]
+    if include or exclude:
+        parts = []
+        if include:
+            parts.append(f"DAHİL: {', '.join(include)}")
+        if exclude:
+            parts.append(f"HARİÇ: {', '.join(exclude)}")
+        filter_box = Table(
+            [[Paragraph("  |  ".join(parts), styles["CoverFilter"])]],
+            colWidths=[150 * mm],
+        )
+        filter_box.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), LIGHT),
+            ("BOX", (0, 0), (-1, -1), 0.5, LINE),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ]))
+        cover_items += [filter_box, Spacer(1, 10 * mm)]
+    else:
+        cover_items.append(Spacer(1, 18 * mm))
+    cover_items += [
+        Paragraph("Bu rapor kantitatif modellere dayanır ve yatırım tavsiyesi değildir.", styles["Disclaimer"]),
+        PageBreak(),
+    ]
+    story += cover_items
 
     # 2. Yönetici özeti
     avg = lambda c: df[c].mean() if c in df.columns else np.nan

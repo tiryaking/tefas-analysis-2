@@ -17,6 +17,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+# GetDataSet/fetch_platform_status.py için (TEFAS WAF aşma). download_tefas.py
+# saf stdlib olduğundan ek bağımlılık gerektirmez.
+fetch = ["cloudscraper>=1.2"]
 
 [project.scripts]
 tefas = "tefas.cli:main"

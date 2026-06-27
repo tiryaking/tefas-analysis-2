@@ -39,6 +39,24 @@ tefas report  --fund-type YAT --risk-free-rate 45   # skorlu+metrik parquet'ten
 `run` için ek bayraklar: `--filter`, `--exclude`, `--no-active-only`,
 `--keep-suspect`, `--min-aum`, `--min-fund-age`, `--no-report`.
 
+## Veri güncelleme (GetDataSet)
+
+Analiz, `Dataset/` altındaki CSV'lere ve `platform_status` JSON'una dayanır.
+Bunları tazelemek için `GetDataSet/` içindeki bağımsız scriptler kullanılır:
+
+```bash
+# Fiyat/AUM verisi — TEFAS API'dan eksik ayları indir (saf stdlib)
+python GetDataSet/download_tefas.py --fund-type YAT --update
+
+# Platform durumu (aktif/pasif) — cloudscraper gerektirir
+.venv/Scripts/python -m pip install -e ".[fetch]"   # veya: pip install cloudscraper
+python GetDataSet/fetch_platform_status.py --fund-type YAT --update
+```
+
+> Not: Scriptler sabit TEFAS `TOKEN`/`DEVICE_ID` kullanır; HTTP 401/403 veya WAF
+> hatası alırsan tarayıcıdan güncel token/cookie alıp script başındaki sabitleri
+> yenilemen gerekir.
+
 ## İnteraktif mod ve config dosyası
 
 Hiç argüman vermeden çalıştırırsan soru-cevap sihirbazı açılır (fon tipi,

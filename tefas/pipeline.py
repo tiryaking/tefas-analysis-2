@@ -58,7 +58,8 @@ def run(fund_type: str = "YAT", risk_free_rate: float = 45.0, *,
 
     # 4) Rapor
     if write_report:
-        report.generate(scored, met, fund_type, risk_free_rate, combined=combined)
+        report.generate(scored, met, fund_type, risk_free_rate, combined=combined,
+                        include=include, exclude=exclude)
 
     print(f"\n[DONE] Tamamlandı. Rapor: {paths.report_pdf}")
     return Artifacts(paths.combined_parquet, paths.metrics_csv, paths.scored_csv, paths.report_pdf)
