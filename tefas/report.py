@@ -44,9 +44,12 @@ LIGHTER = colors.HexColor("#f7f9fd")
 GREY = colors.HexColor("#6b7785")
 LINE = colors.HexColor("#d4dbe6")
 MPL_NAVY, MPL_BLUE, MPL_GREEN, MPL_GREY = "#13294b", "#1f5fb0", "#0f8a6a", "#b8c1cf"
-# Karşılaştırmada fon-başına tutarlı renkler (tüm grafiklerde aynı sıra).
-FUND_PALETTE = ["#1f5fb0", "#0f8a6a", "#e0a526", "#c0622d", "#7d4fb0", "#2e86c1",
-                "#c0392b", "#5d6d7e", "#16a085", "#8e44ad"]
+# Fon-başına tutarlı renkler: bir fon TÜM grafiklerde aynı rengi taşır
+# (ana rapor + karşılaştırma). Sıra sabittir, asla döngülenmez; palet
+# CVD/kontrast kontrollerinden geçirilmiştir (gri okunan #5d6d7e ve düşük
+# kontrastlı #e0a526 değiştirildi, zayıf komşu çiftler ayrıştırıldı).
+FUND_PALETTE = ["#1f5fb0", "#bf8410", "#0f8a6a", "#c0392b", "#7d4fb0",
+                "#16a085", "#b83a68", "#2e86c1", "#c0622d", "#8e44ad"]
 GOOD = colors.HexColor("#e3f4ec")   # en-iyi hücre vurgusu (açık yeşil)
 
 
@@ -240,7 +243,10 @@ def _chart_risk_return(df, highlight_codes, path):
     return _chart(fig, path)
 
 
-def _chart_growth_history(combined, codes, path):
+def _chart_growth_history(combined, codes, path, color_map=None, benchmark=None,
+                          benchmark_label="Evren medyanı"):
+    """Öne çıkan fonların ortak dönemde büyümesi. `color_map` fon→renk eşlemesi
+    (tear-sheet/detay sayfalarıyla tutarlı); `benchmark` baz-100 akran patikası."""
     if combined is None or not codes:
         return None
     pivot = combined.pivot_table(index="Tarih", columns="Fon Kodu", values="Fiyat", aggfunc="first").sort_index()
@@ -253,8 +259,17 @@ def _chart_growth_history(combined, codes, path):
         return None
     df_normalized = (df / df.iloc[0]) * 100
     fig, ax = plt.subplots(figsize=(9.6, 4.5))
-    for c in avail:
-        ax.plot(df_normalized.index, df_normalized[c], label=c, linewidth=1.5)
+    for i, c in enumerate(avail):
+        color = (color_map or {}).get(c, FUND_PALETTE[i % len(FUND_PALETTE)])
+        ax.plot(df_normalized.index, df_normalized[c], label=c, linewidth=1.6, color=color)
+    if benchmark is not None and len(benchmark) >= 2:
+        b = benchmark.copy()
+        b.index = pd.to_datetime(b.index)
+        b = b[(b.index >= df.index[0]) & (b.index <= df.index[-1])]
+        if len(b) >= 2:
+            b = b / b.iloc[0] * 100.0   # grafiğin kendi dönemine yeniden bazla
+            ax.plot(b.index, b.values, label=benchmark_label, linewidth=1.4,
+                    color=MPL_GREY, linestyle="--", zorder=1)
     ax.set_ylabel("Sermaye (Başlangıç = 100 TL)", fontsize=9, color=MPL_NAVY)
     ax.set_title("Öne Çıkan Fonların Kümülatif Büyümesi", fontsize=11, color=MPL_NAVY, fontweight="bold")
     ax.grid(True, alpha=0.25, linestyle="--")
@@ -552,6 +567,8 @@ def _fund_card(row, spark_img, styles, rf):
         kv("VaR %95", pct(row.get("VaR_95"))) + kv("CVaR %95", pct(row.get("CVaR_95"))),
         kv("Reel Get.", pct(row.get("Reel_Getiri_1Y"))) + kv("Kuruluş CAGR", pct(row.get("Yillik_Getiri_Kurulus"))),
         kv("AUM (mn TL)", fmt(row.get("Fon_Toplam_Deger_Milyon_TL"), 0)) + kv("Yaş (yıl)", fmt(row.get("Fon_Yasi_Yil"), 1)),
+        kv("rf üzeri", "✓" if bool(row.get("Rf_Ustu")) else "—") +
+        kv("Tema yüzdelik", fmt(row.get("Tema_Rel_Skor"), 0)),
     ]
     gtbl = Table(grid, colWidths=[18 * mm, 18 * mm, 18 * mm, 18 * mm])
     gtbl.setStyle(TableStyle([
@@ -597,15 +614,18 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
 
     n_funds = len(df)
     df["_tema"] = df["Fon Adi"].map(fund_theme)
-    # Öneriler yalnızca UYGUN fonlardan (rf/AUM/yaş kriterlerini geçen); sıralama
-    # ise tüm evren üzerinden yapıldı (bkz. metrics.compute_metrics). Uygun yoksa
-    # tüm evrene düşülür.
+    # Öneriler yalnızca UYGUN fonlardan (AUM/yaş kriterlerini geçen); sıralama
+    # ise tüm evren üzerinden yapıldı (bkz. metrics.compute_metrics). rf artık
+    # eleme değil bilgilendirici bayrak (Rf_Ustu). Uygun yoksa tüm evrene düşülür.
     elig = df[df["Uygun"]].copy() if "Uygun" in df.columns else df.copy()
     if elig.empty:
         elig = df.copy()
     n_elig = int(df["Uygun"].sum()) if "Uygun" in df.columns else n_funds
     styles = _styles()
     today = datetime.now().strftime("%d.%m.%Y")
+    mac = config.macro()
+    # Config dosyasında bulunmayıp koddaki varsayılana düşen oranlar kapakta işaretlenir.
+    dflt = lambda key: " (varsayılan)" if key in mac.defaults_used else ""
     story = []
 
     # 1. Kapak — tüm içerik tek sayfada kalsın diye KeepTogether ile sarılır.
@@ -615,8 +635,9 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
         Paragraph(f"{paths.fund_name} Fonları &nbsp;|&nbsp; Kantitatif Analiz, Risk Profilleme & Portföy Önerileri", styles["CoverSub"]),
         Spacer(1, 12 * mm),
         Paragraph(f"Rapor Tarihi: {today}<br/>Analiz Edilen Fon Sayısı: {n_funds}<br/>"
-                  f"Risksiz Faiz Oranı (Benchmark): %{risk_free_rate:.1f}<br/>"
-                  f"Enflasyon (TÜFE): %{config.macro().inflation_rate:.0f} &nbsp;|&nbsp; Politika Faizi: %{config.macro().policy_rate:.0f}", styles["CoverInfo"]),
+                  f"Risksiz Faiz Oranı (Benchmark): %{risk_free_rate:.1f}{dflt('risk_free_rate') if risk_free_rate == mac.risk_free_rate else ''}<br/>"
+                  f"Enflasyon (TÜFE): %{mac.inflation_rate:.0f}{dflt('inflation_rate')} &nbsp;|&nbsp; "
+                  f"Politika Faizi: %{mac.policy_rate:.0f}{dflt('policy_rate')}", styles["CoverInfo"]),
         Spacer(1, 8 * mm),
     ]
     if include or exclude:
@@ -650,17 +671,20 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
     med = lambda c: df[c].median() if c in df.columns else np.nan
     top_overall = elig.nlargest(5, "Overall_Score")
     top10_codes = elig.nlargest(10, "Overall_Score")["Fon Kodu"].tolist()
+    # Fon → renk eşlemesi: ilk 10 fon, tüm grafiklerde (büyüme, detay, sparkline
+    # vurguları) aynı rengi taşır. Renk fona bağlıdır, sıralamaya değil.
+    color_map = {code: FUND_PALETTE[i % len(FUND_PALETTE)] for i, code in enumerate(top10_codes)}
     ret_all = pd.to_numeric(df["Yillik_Getiri"], errors="coerce")
     real_all = pd.to_numeric(df.get("Reel_Getiri_1Y"), errors="coerce") if "Reel_Getiri_1Y" in df.columns else None
     pf_ = lambda m: f"{m * 100:.0f}%"
     cards = [
         (f"{n_funds:,}", "Analiz edilen fon"),
-        (f"{n_elig:,}", "Uygun (rf/AUM/yaş)"),
+        (f"{n_elig:,}", "Uygun (AUM/yaş)"),
         (pct(avg("Yillik_Getiri")), "Ort. yıllık getiri"),
         (pct(avg("Yillik_Volatilite")), "Ort. volatilite"),
         (fmt(avg("Sharpe_Orani"), 2), "Ort. Sharpe"),
         (pct(med("Max_Drawdown")), "Medyan Max DD"),
-        (pf_((ret_all > config.macro().inflation_rate).mean()), "Enflasyonu geçen"),
+        (pf_((ret_all > mac.inflation_rate).mean()), "Enflasyonu geçen"),
         (pf_((real_all > 0).mean()) if real_all is not None else "—", "Pozitif reel getiri"),
     ]
     story += [Paragraph("GÖSTERGE PANELİ", styles["Section"]),
@@ -693,15 +717,15 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
 
     # ── Benchmark karşılaştırması (#2): UYGUN fonlar (rf'yi geçenler) üzerinden;
     #    asıl soru enflasyon/politika faizi ve reel getiri.
-    m_infl = int((elig["Yillik_Getiri"] > config.macro().inflation_rate).sum())
-    m_pol = int((elig["Yillik_Getiri"] > config.macro().policy_rate).sum())
+    m_infl = int((elig["Yillik_Getiri"] > mac.inflation_rate).sum())
+    m_pol = int((elig["Yillik_Getiri"] > mac.policy_rate).sum())
     has_real = "Reel_Getiri_1Y" in elig.columns
     m_real_pos = int((elig["Reel_Getiri_1Y"] > 0).sum()) if has_real else 0
     avg_real = elig["Reel_Getiri_1Y"].mean() if has_real else np.nan
     p = lambda k: f"{k} / {n_elig} (%{k / n_elig * 100:.0f})" if n_elig else "—"
     bench_rows = [
-        [f"Enflasyonu (%{config.macro().inflation_rate:.0f}) geçen", p(m_infl),
-         f"Politika faizini (%{config.macro().policy_rate:.0f}) geçen", p(m_pol)],
+        [f"Enflasyonu (%{mac.inflation_rate:.0f}) geçen", p(m_infl),
+         f"Politika faizini (%{mac.policy_rate:.0f}) geçen", p(m_pol)],
         ["Pozitif reel getiri", p(m_real_pos),
          "Ortalama reel getiri", pct(avg_real)],
     ]
@@ -712,7 +736,10 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
     bench_tbl.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), LIGHTER), ("BOX", (0, 0), (-1, -1), 0.5, LINE),
                                    ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.white), ("TOPPADDING", (0, 0), (-1, -1), 5),
                                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5), ("LEFTPADDING", (0, 0), (-1, -1), 8)]))
-    story += [Paragraph(f"Benchmark Karşılaştırması (rf'yi geçen {n_elig} uygun fon üzerinden):", styles["SubSec"]),
+    rf_note = f" Bunların {int(elig['Rf_Ustu'].sum())} tanesi rf (%{risk_free_rate:.0f}) üzeri getiri sağlıyor." \
+        if "Rf_Ustu" in elig.columns else ""
+    story += [Paragraph(f"Benchmark Karşılaştırması (AUM/yaş kriterlerini geçen {n_elig} uygun fon üzerinden):{rf_note}",
+                        styles["SubSec"]),
               bench_tbl, Spacer(1, 2 * mm)]
 
     # ── Veri kapsamı uyarısı (#1)
@@ -722,7 +749,8 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
         f"<b>Veri kapsamı:</b> medyan gözlem {med_days} iş günü. Analiz edilen fonların "
         f"<b>{n_thin}</b> tanesinin 1 yıldan ({config.TRADING_DAYS_PER_YEAR} iş günü) kısa fiyat geçmişi var; "
         f"bu fonlarda yıllık getiri <b>daha kısa bir pencereden yıllıklandırıldığı</b> için (ve Sharpe) "
-        f"gürültülüdür — tablolarda <b>*</b> ile işaretlenir.",
+        f"gürültülüdür — tablolarda <b>*</b> ile işaretlenir ve skorlamada akran medyanına doğru "
+        f"güvenilirlik-düzeltmesi uygulanır (bkz. Metodoloji).",
         styles["BodySm"]), Spacer(1, 2 * mm)]
 
     img = _chart_top_returns(elig, chart_dir / "top_returns.png")
@@ -731,20 +759,25 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
     story.append(PageBreak())
 
     # 4. En iyi fonlar
-    headers = ["Kod", "Fon Adı", "Skor", "Yıl. Get.", "Volat.", "Sharpe", "Sortino", "Max DD", "Gerekçe"]
-    cw = [13 * mm, 52 * mm, 13 * mm, 16 * mm, 16 * mm, 15 * mm, 15 * mm, 15 * mm, 62 * mm]
+    rf_mark = lambda r: "✓" if bool(r.get("Rf_Ustu")) else "—"
+    headers = ["Kod", "Fon Adı", "Skor", "Yıl. Get.", "Volat.", "Sharpe", "Sortino", "Max DD", "rf+", "Gerekçe"]
+    cw = [13 * mm, 52 * mm, 13 * mm, 16 * mm, 16 * mm, 15 * mm, 15 * mm, 15 * mm, 9 * mm, 58 * mm]
     rows = [[Paragraph(_code_label(r), styles["CellB"]), Paragraph(short_name(r["Fon Adi"], 42), styles["Cell"]),
              Paragraph(fmt(r.get("Overall_Score"), 1), styles["Cell"]), Paragraph(pct(r.get("Yillik_Getiri")), styles["Cell"]),
              Paragraph(pct(r.get("Yillik_Volatilite")), styles["Cell"]), Paragraph(fmt(r.get("Sharpe_Orani"), 2), styles["Cell"]),
              Paragraph(fmt(r.get("Sortino_Orani"), 2), styles["Cell"]), Paragraph(pct(r.get("Max_Drawdown")), styles["Cell"]),
+             Paragraph(rf_mark(r), styles["Cell"]),
              Paragraph(build_rationale(r), styles["Rationale"])] for _, r in elig.nlargest(12, "Overall_Score").iterrows()]
     story += [Paragraph("EN İYİ FONLAR — GENEL SIRALAMA", styles["Section"]),
-              Paragraph("Composite skora göre ilk 12 <b>uygun</b> fon (rf/AUM/yaş kriterlerini geçen) ve her biri için kısa yatırım gerekçesi.", styles["BodySm"]),
+              Paragraph("Composite skora göre ilk 12 <b>uygun</b> fon (AUM/yaş kriterlerini geçen) ve her biri için kısa yatırım gerekçesi. "
+                        f"<b>rf+</b> sütunu yıllık getirinin risksiz faizi (%{risk_free_rate:.0f}) aşıp aşmadığını gösterir — bilgilendirici bayraktır, eleme kriteri değildir.", styles["BodySm"]),
               _make_table(headers, rows, cw, styles, align_right_from=2),
               Spacer(1, 2 * mm),
               Paragraph("* 1 yıldan kısa fiyat geçmişi — yıllık getiri daha kısa pencereden yıllıklandırılır, gürültülüdür.", styles["Disclaimer"])]
 
-    growth_chart = _chart_growth_history(combined, top_overall["Fon Kodu"].tolist(), chart_dir / "growth.png")
+    universe_bench = themes.theme_median_growth(combined)
+    growth_chart = _chart_growth_history(combined, top_overall["Fon Kodu"].tolist(), chart_dir / "growth.png",
+                                         color_map=color_map, benchmark=universe_bench)
     if growth_chart:
         story += [Spacer(1, 4 * mm),
                   Image(growth_chart, width=236 * mm, height=110 * mm)]
@@ -775,6 +808,7 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
     profile_defs = [
         ("Conservative", "MUHAFAZAKÂR", "Sermaye koruması önceliklidir: düşük volatilite, düşük drawdown, yüksek istikrar ve mevduatı geçen getiri. Genellikle para piyasası ve kısa vadeli borçlanma fonları öne çıkar."),
         ("Balanced", "DENGELİ", "En iyi risk-ayarlı getiri (Sortino/Calmar) orta volatilite bandında. Aşağı yönlü riske duyarlıdır."),
+        ("Moderate", "ORTA", "Sharpe ağırlıklı dengeli büyüme: risk-ayarlı getiri önceliklidir; orta volatilite bandı, getiri ve istikrar dengesiyle desteklenir."),
         ("Aggressive", "AGRESİF", "Getiri ve momentum odaklı, daha yüksek volatilite toleransı; yine de pozitif Calmar şartıyla risk-bilinçli."),
     ]
     prof_headers = ["Kod", "Fon Adı", "Tema", "Skor", "Yıl. Get.", "Volat.", "Sharpe", "Max DD"]
@@ -894,21 +928,32 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
          f"<b>ortak gerilemeli ~1 işlem yılı</b> (son {config.SCORING_LOOKBACK_DAYS} gözlem) penceresinde hesaplanır; böylece farklı "
          "geçmiş uzunluğundaki fonlar aynı dönem üzerinden kıyaslanır. 1 yıldan uzun geçmişli fonlar son pencereye kırpılır; daha "
          "kısa geçmişliler tüm geçmişini kullanır ve <b>*</b> ile işaretlenir. Kuruluştan-bugüne değerler ayrıca künye kartlarında referans olarak verilir."),
-        ("Composite Skor", "Sharpe (%25), Sortino (%15), düşük drawdown (%20), yıllık getiri (%25), tutarlılık (%7,5) ve likidite/AUM (%7,5) "
-         "eksenlerinin yüzdelik-sıra ağırlıklı bileşimi. Sharpe ve Sortino yüksek korelasyonlu olduğundan toplam ağırlıkları sınırlandırılmıştır. "
+        ("Composite Skor", "Sharpe (%25), Sortino (%15), düşük drawdown (%20), yıllık getiri (%20), tema-içi getiri yüzdeliği (%5), "
+         "tutarlılık (%7,5) ve likidite/AUM (%7,5) eksenlerinin yüzdelik-sıra ağırlıklı bileşimi — getiri etkisi toplamda %25 "
+         "(%20 mutlak + %5 akran-göreli). Sharpe ve Sortino yüksek korelasyonlu olduğundan toplam ağırlıkları sınırlandırılmıştır. "
          "Tutarlılık skoru pozitif gün/ay oranı ve aylık getiri dağılımına dayanır; drawdown ve Sortino'yu tekrar kullanmaz (çifte sayım yok). "
          "Yüzdelik-sıra skorları uç değerlere karşı dayanıklıdır ve <b>tüm evren</b> üzerinden hesaplanır."),
-        ("Sıralama vs. Seçim", "Skorlar tüm (veri-kalitesi geçerli) evren üzerinden hesaplanır; risksiz faiz / AUM / yaş kriterleri "
-         "sıralamayı bozmadan bir <b>uygunluk</b> filtresi olarak uygulanır. Öneri tabloları yalnızca uygun fonları listeler; "
-         "risk-getiri haritası bağlam için tüm evreni gösterir."),
-        ("Risk-Ayarlı Metrikler", "Sharpe = (Getiri − Rf) / Volatilite; Sortino aşağı yönlü sapmayı; Calmar maksimum drawdown'u esas alır. "
-         "Volatilite ve Sortino winsorize edilmiş günlük getirilerle hesaplanır. VaR/CVaR tail-risk tablosunda raporlanır."),
+        ("Kısa Geçmiş Düzeltmesi (Shrinkage)", f"1 yıldan kısa pencereden yıllıklandırılan getiri gürültülüdür. Skorlamada getiri, "
+         f"güvenilirlik ağırlığı w = pencere günü / {config.RETURN_FULL_CREDIBILITY_DAYS} (en çok 1) ile fonun kendi getirisi ve akran "
+         f"(tema, en az {config.THEME_MIN_FUNDS} fon; yoksa evren) medyanının bileşimine çekilir. {config.RETURN_FULL_CREDIBILITY_DAYS}+ "
+         "gün geçmişi olan fonlarda düzeltme sıfırdır. Tablolarda gösterilen getiriler HAM değerlerdir; düzeltme yalnızca skor girdisidir."),
+        ("Akran (Tema) Kıyası", "Harici bir endeks kullanılmaz; benchmark veri-seti içidir. Her fon, adından türetilen temasına atanır ve "
+         f"temasındaki (≥ {config.THEME_MIN_FUNDS} fon) getiri yüzdeliği <b>tema-içi skor</b> olarak hesaplanır. Büyüme grafiklerindeki "
+         "kesikli gri çizgi evren/tema medyan patikasıdır (günlük medyan getiriden bileşiklenir)."),
+        ("Sıralama vs. Seçim", "Skorlar tüm (veri-kalitesi geçerli) evren üzerinden hesaplanır; AUM / yaş kriterleri sıralamayı bozmadan "
+         "bir <b>uygunluk</b> filtresi olarak uygulanır. Risksiz faiz artık eleme kriteri DEĞİLDİR: rf üzeri getiri sağlayan fonlar "
+         "tablolarda <b>rf+</b> bayrağıyla işaretlenir. Öneri tabloları yalnızca uygun fonları listeler; risk-getiri haritası bağlam "
+         "için tüm evreni gösterir."),
+        ("Risk-Ayarlı Metrikler & Winsorizasyon", "Sharpe = (Getiri − Rf) / Volatilite; Sortino aşağı yönlü sapmayı; Calmar maksimum "
+         f"drawdown'u esas alır. Volatilite ve Sortino, ±%{config.DAILY_RETURN_CLIP:.0f} winsorize edilmiş günlük getirilerle hesaplanır "
+         "(ikinci moment tahminini veri hatalarına karşı stabilize eder); Max Drawdown, VaR/CVaR, çarpıklık ve en iyi/kötü gün ise "
+         "HAM getirilerle hesaplanır — kuyruk metrikleri gerçek kuyrukları görmelidir. Bu ayrım bilinçli bir tasarımdır."),
         ("Portföy Riski", "Örnek portföyün volatilitesi fonların gerçek günlük getiri kovaryansından σ = √(w'·Σ·w) ile hesaplanır. "
          "Risk katkısı RC_i = w_i·(Σw)_i / (w'·Σ·w) her fonun riske gerçek payını, sualtı eğrisi ise tarihsel drawdown'u gösterir."),
         ("Veri Kalitesi", f"Tek günde > %{config.DATA_QUALITY_MAX_DAILY_MOVE:.0f} fiyat hareketi yapan fonlar şüpheli kabul edilip analizden çıkarılır."),
-        ("Reel Getiri & Vergi", f"Reel getiri Fisher denklemiyle enflasyondan (%{config.macro().inflation_rate:.0f} TÜFE) arındırılır. "
+        ("Reel Getiri & Vergi", f"Reel getiri Fisher denklemiyle enflasyondan (%{mac.inflation_rate:.0f} TÜFE) arındırılır. "
          "<b>Net getiri yalnızca yönetim ücreti düşülerek</b> verilir; stopaj/işlem vergileri tutuş süresi ve fon tipine bağlı olduğundan "
-         "(bu veri setinde yok) modellenmez."),
+         "(bu veri setinde yok) modellenmez. Enflasyon, politika faizi ve yönetim ücreti oranları <b>tefas.config.json</b> dosyasından okunur."),
         ("Survivorship Bias", "Analiz yalnızca platformda hâlen aktif olan fonları kapsar. Kapanmış, birleşmiş veya tasfiye edilmiş "
          "fonlar veri setinde bulunmadığından geçmiş performans istatistikleri iyimser yönde sapabilir (survivorship bias)."),
     ]
