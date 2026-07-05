@@ -5,10 +5,11 @@ kantitatif finansal analiz aracı. Bu, [`Tefas_New`](../Tefas_New) projesinin
 **aynı mimariyle ama temiz, test edilmiş ve hızlı** şekilde yeniden inşa edilmiş
 sürümüdür.
 
-> Aynı sonuçlar, daha iyi mühendislik: v1 ile **birebir aynı çıktıyı** üretir
-> (490 fon; Ort. getiri %64.5, Sharpe 1.18, composite 50.1; aynı ilk-5: PSE,
-> PRU, PBR, PRY, KKL) — ama **~3.5× daha hızlı** (29.7 sn vs 1 dk 44 sn) ve
-> **20 birim testi** ile korunan finansal matematik.
+> Aynı mimari, daha iyi mühendislik **ve düzeltilmiş finansal metodoloji**: v2,
+> v1'in mimarisini (ETL→metrik→skor→rapor) korur ama uzman değerlendirmesiyle
+> saptanan hataları giderir — bu nedenle **v1 ile birebir aynı çıktıyı artık
+> ÜRETMEZ** (bkz. aşağıda "Metodoloji düzeltmeleri"). ~3.5× daha hızlı çalışır ve
+> her formül **birim testleriyle** korunur.
 
 ## Hızlı başlangıç
 
@@ -23,13 +24,14 @@ python -m venv .venv
 Test:
 
 ```bash
-.venv/Scripts/python -m pytest -q        # 20 passed
+.venv/Scripts/python -m pytest -q        # 34 passed
 ```
 
 ## Tek komut, tek CLI
 
 ```bash
 tefas run     --fund-type YAT --risk-free-rate 45   # tüm pipeline (bellekte)
+tefas compare --fund-type YAT --risk-free-rate 45   # belirli fonları karşılaştır
 tefas etl     --fund-type YAT                        # yalnızca ETL  -> combined.parquet
 tefas metrics --fund-type YAT --risk-free-rate 45   # combined.parquet'ten
 tefas score   --fund-type YAT --risk-free-rate 45   # metrics+combined parquet'ten
@@ -110,6 +112,35 @@ tefas run --config filter_config.txt --fund-type YAT
 İnteraktif modda da "Filtreler nasıl belirlensin?" adımında **dosyadan yükle**
 seçeneği bu dosyayı kullanır (Enter = `filter_config.txt`).
 
+## Karşılaştırma modu (`tefas compare`)
+
+Belirli fonları **yan yana** kıyaslayan ayrı bir PDF üretir — tarama/skorlama
+değil, senin seçtiğin kodların doğrudan karşılaştırması. Kodları
+[`comparison_config.txt`](comparison_config.txt) dosyasına (satır başına bir kod,
+`#` yorum, isteğe bağlı `[COMPARE]` başlığı) yaz ya da komut satırından ver:
+
+```bash
+tefas compare --fund-type YAT --risk-free-rate 45          # comparison_config.txt'ten
+tefas compare --codes PRY,PBR,BMU                          # dosya yerine kodlar
+tefas compare --config baska_liste.txt                     # başka dosya
+```
+
+Çıktı: `Reports/tefas_karsilastirma_yatirim.pdf`. İçerik:
+
+- **Özet & öne çıkanlar:** her ölçütte (getiri, Sharpe, düşük vol, drawdown, reel
+  getiri, likidite, tutarlılık) en iyi fonu gösteren tablo + **radar** grafiği.
+- **Karşılaştırma tablosu:** metrikler satır, fonlar sütun; her satırın en iyi
+  hücresi **yeşil** vurgulanır.
+- **Getiri & büyüme:** ortak dönemde normalize (100 taban) büyüme + dönemsel
+  (1A/3A/6A/1Y) getiri barları.
+- **Risk & dayanıklılık:** risk-getiri konumu + fonların **sualtı/drawdown**
+  eğrileri.
+- **Korelasyon:** fonların birlikte hareketi (çeşitlendirme için).
+
+Kodlar **"olduğu gibi"** kıyaslanır: aktiflik/rf/AUM/yaş filtresi uygulanmaz;
+yalnızca verisi kullanılamayacak kadar az (< 20 gözlem) olan fon atlanır.
+İnteraktif modda "Fon karşılaştırma" seçeneğiyle de erişilir.
+
 ## Mimari
 
 Bilinçli olarak v1 ile **aynı aşamalı yapı** (ETL → metrik → skor → rapor) —
@@ -126,7 +157,7 @@ tefas/
   report.py        generate(scored_df, metrics_df, ...) -> PDF
   pipeline.py      run(): aşamaları BELLEKTE bağlar, parquet önbellek
   cli.py           Tek `tefas` komutu, alt-komutlar
-tests/             20 altın-değer + entegrasyon testi
+tests/             34 altın-değer + entegrasyon testi
 ```
 
 ## v1 incelemesinden uygulanan bulgular
@@ -137,7 +168,7 @@ Bu sürüm, v1 üzerine yapılan değerlendirmedeki her maddeyi uygular:
 |---|-------|----|----|
 | 1 | **Orkestrasyon** | `run_analysis.py` her aşamayı ayrı `subprocess` başlatır, aşamalar ~37 MB CSV'yi **3 kez** okur/yazar | `pipeline.run()` aşamaları fonksiyon olarak çağırır, DataFrame'ler bellekte aktarılır → **~3.5× hız** |
 | 2 | **Ara format** | Ara veri CSV (37.6 MB, tipsiz, yavaş) | **Parquet** (8.7 MB, tipli) — **4.3× küçük**; insan-dostu özetler ayrıca CSV |
-| 3 | **Testler** | Yok — finansal formüller satır-içi gömülü | Her formül **saf fonksiyon** + **20 test** (altın değerler) |
+| 3 | **Testler** | Yok — finansal formüller satır-içi gömülü | Her formül **saf fonksiyon** + **34 test** (altın değerler) |
 | 4 | **CLI** | ~8 script, her birinde ayrı argparse | Tek `tefas` komutu, paylaşılan config |
 | 5 | **Ölü kod** | Legacy raporlar, scipy-bağımlı optimizer/stress/black-litterman/factor/monte-carlo, çalışmayan Flask dashboard | Yalnızca raporun kullandığı yollar — hepsi temizlendi |
 | 6 | **Encoding** | UTF-8 düzeltmesi her script'te tekrar | `io_utils.setup_utf8()` tek yerde |
@@ -178,16 +209,47 @@ CLI. Daha ağırı gereksiz karmaşıklık olurdu.
 
 ## Metodoloji (özet)
 
-Finansal formüller v1 ile birebir aynıdır ve artık [tests/](tests/) ile
-doğrulanır:
+Formüller [tests/](tests/) ile altın-değerlere karşı doğrulanır:
 
-- **CAGR** gerçek uç fiyatlardan (aritmetik ortalama bileşiklemesinin aşırı
-  tahminini önler).
-- **Volatilite / Sortino** winsorize edilmiş (±%25) günlük getirilerle.
-- **Sharpe** = (Getiri − Rf) / Volatilite; **Calmar** = (Getiri − Rf) / MaxDD.
-- **Composite skor** = yüzdelik-sıra ağırlıklı (Sharpe %30, Sortino %20, düşük
-  drawdown %20, getiri %20, tutarlılık %5, likidite %5) — outlier'a dayanıklı.
-- **Veri kalitesi**: tek günde > %35 hareket eden fonlar elenir.
+- **Ortak değerlendirme penceresi:** Volatilite, Sharpe, Sortino, Calmar,
+  drawdown ve VaR tüm fonlarda **ortak gerilemeli ~1 işlem yılı** penceresinde
+  (`config.SCORING_LOOKBACK_DAYS`) hesaplanır; farklı geçmiş uzunluğundaki
+  fonlar aynı dönem üzerinden kıyaslanır. Kuruluştan-bugüne değerler künye
+  kartlarında referans olarak kalır.
+- **Gösterilen/skorlanan getiri yıllıklandırılmıştır:** tablolar ve skorlama
+  "Yıllık Getiri"yi (pencere içi CAGR) kullanır — Sharpe/Sortino ile aynı baz.
+  1 yıldan kısa geçmişli (`*`) fonlarda bu, daha kısa bir pencereden
+  yıllıklandırıldığı için daha gürültülüdür (ör. 8 aylık %64 kümülatif ≈ %110
+  yıllık). Ham kümülatif dönem getirisi ayrıca `Getiri_1Y` sütununda saklanır.
+- **CAGR** gerçek uç fiyatlardan; **Volatilite/Sortino** winsorize (±%25) günlük
+  getirilerle; **Sharpe** = (Getiri − Rf)/Vol; **Calmar** = (Getiri − Rf)/MaxDD.
+- **Composite skor** = yüzdelik-sıra ağırlıklı (Sharpe %25, Sortino %15, düşük
+  drawdown %20, yıllık getiri %25, tutarlılık %7,5, likidite %7,5) — outlier'a
+  dayanıklı. Tutarlılık pozitif gün/ay oranına dayanır; drawdown/Sortino'yu
+  tekrar kullanmaz (çifte sayım yok).
+- **Sıralama vs. seçim:** skorlar tüm (veri-kalitesi geçerli) evren üzerinden;
+  rf/AUM/yaş bir **uygunluk** filtresidir (satır düşürmez). Öneriler yalnızca
+  uygun fonlardan gelir.
+- **Veri kalitesi:** tek günde > %35 hareket eden fonlar elenir.
+
+### Metodoloji düzeltmeleri (v1 → v2 paritesini bilinçli kırar)
+
+1. **Ortak pencere:** risk metrikleri artık her fonun *tüm geçmişi* yerine ortak
+   gerilemeli 1 yılda hesaplanır (elma-armut sıralaması giderildi).
+2. **Sıralama/seçim ayrımı:** rf filtresi artık sıralamadan önce evreni budamaz;
+   uygunluk maskesi olarak uygulanır.
+3. **Geçersiz stopaj kaldırıldı:** `net_return`'ün "enflasyon+5 üstüne %15" vergi
+   sezgiseli (yıllıklandırılmış orana vergi — boyutsal hata) kaldırıldı;
+   `Net_Getiri_1Y` yalnızca yönetim ücreti düşülmüş getiridir.
+4. **Çifte sayım giderildi:** Consistency artık drawdown/Sortino/çarpıklığı
+   tekrar kullanmaz.
+
+### Rapor (PDF) — yeni içerik
+
+Gösterge paneli (KPI kartları + dağılım histogramları + benchmark barları),
+fon künye kartları (tear-sheet: metrik ızgarası + büyüme/drawdown sparkline),
+portföy **risk katkısı** (kovaryanstan) ve **sualtı/drawdown** grafiği, tail-risk
+(VaR/CVaR) tablosu ve kategori/tema kırılımı eklendi.
 
 **Uyarı:** Bu araç yatırım tavsiyesi vermez. Geçmiş performans gelecek getiriyi
 garanti etmez.

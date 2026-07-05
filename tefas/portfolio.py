@@ -45,6 +45,51 @@ def portfolio_volatility_from_returns(returns_df: pd.DataFrame, weights) -> floa
     return float(np.sqrt(max(var, 0.0)))
 
 
+def risk_contributions(returns_df: pd.DataFrame, weights) -> np.ndarray:
+    """
+    Her fonun portföy varyansına yüzde katkısı (toplamı 1.0):
+
+        RCᵢ = wᵢ · (Σw)ᵢ / (wᵀ Σ w)
+
+    Ağırlıktan bağımsız olarak *hangi fonun riski gerçekten sürüklediğini*
+    gösterir. Σ = günlük kovaryans × 252. `weights` sütun sırasıyla hizalı.
+    """
+    if returns_df.shape[1] < 1 or len(returns_df) < 2:
+        return np.array([])
+    w = np.asarray(weights, dtype="float64")
+    cov = returns_df.cov().to_numpy() * TD
+    port_var = float(w @ cov @ w)
+    if port_var <= 0:
+        return np.full(len(w), np.nan)
+    return (w * (cov @ w)) / port_var
+
+
+def portfolio_drawdown(combined: pd.DataFrame, portfolio: list[dict]):
+    """
+    Örnek portföyün zaman içindeki kümülatif değeri ve sualtı (drawdown) eğrisi.
+
+    Günlük getiriler ortak tarihlerde hizalanır, ağırlıklarla birleşir; kümülatif
+    değer 100'e normalize edilir. Döner: (index, cumulative[%100 taban], drawdown[%]).
+    None döner yeterli ortak veri yoksa.
+    """
+    if combined is None or not portfolio:
+        return None
+    codes = [p["Fon Kodu"] for p in portfolio]
+    rets = returns_matrix(combined, codes)
+    if rets.shape[1] < 1 or len(rets) < 10:
+        return None
+    weight_by_code = {p["Fon Kodu"]: p["Agirlik"] for p in portfolio}
+    w = np.array([weight_by_code[c] for c in rets.columns], dtype="float64")
+    if w.sum() <= 0:
+        return None
+    w = w / w.sum()
+    port_daily = (rets.to_numpy() / 100.0) @ w              # günlük portföy getirisi (oran)
+    cum = 100.0 * np.cumprod(1.0 + port_daily)
+    peak = np.maximum.accumulate(cum)
+    dd = (peak - cum) / peak * 100.0
+    return rets.index, cum, dd
+
+
 def average_correlation(returns_df: pd.DataFrame) -> float:
     """Köşegen-dışı ortalama ikili korelasyon (çeşitlendirme göstergesi)."""
     if returns_df.shape[1] < 2:
@@ -85,6 +130,7 @@ def portfolio_risk(combined: pd.DataFrame, portfolio: list[dict]) -> dict | None
     port_vol = portfolio_volatility_from_returns(rets, w)
     asset_vols = rets.std().to_numpy() * np.sqrt(TD)     # yıllık tekil vol (%)
     weighted_avg_vol = float(np.sum(w * asset_vols))
+    rc = risk_contributions(rets, w)                     # varyansa yüzde katkı
 
     return {
         "portfolio_vol": port_vol,
@@ -92,4 +138,7 @@ def portfolio_risk(combined: pd.DataFrame, portfolio: list[dict]) -> dict | None
         "diversification_gain": weighted_avg_vol - port_vol,
         "avg_correlation": average_correlation(rets),
         "n_used": len(used),
+        "used_codes": used,
+        "weights": {c: float(w[i]) for i, c in enumerate(used)},
+        "risk_contributions": {c: float(rc[i]) for i, c in enumerate(used)} if rc.size else {},
     }

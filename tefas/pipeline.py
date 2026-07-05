@@ -65,6 +65,51 @@ def run(fund_type: str = "YAT", risk_free_rate: float = 45.0, *,
     return Artifacts(paths.combined_parquet, paths.metrics_csv, paths.scored_csv, paths.report_pdf)
 
 
+def run_comparison(fund_type: str, risk_free_rate: float, codes: list[str]) -> int:
+    """
+    Karşılaştırma modu: verilen fon kodlarını "olduğu gibi" (aktiflik/rf/AUM/yaş
+    filtresi UYGULAMADAN) yükler, ortak pencerede metriklerini hesaplar ve
+    karşılaştırma PDF'i üretir. Yalnızca verisi kullanılamayacak kadar az olan
+    (< MIN_DATA_POINTS gözlem) fonlar atlanır.
+    """
+    setup_utf8()
+    paths = config.paths_for(fund_type)
+    config.REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"\n{'='*64}\nTEFAS KARŞILAŞTIRMA — {paths.fund_name} | rf=%{risk_free_rate:.1f}\n{'='*64}")
+    print(f"[INFO] İstenen kodlar: {', '.join(codes)}")
+
+    # Tüm fonları yükle (filtre yok) — kodlar olduğu gibi karşılaştırılacak.
+    combined = etl.load_combined(fund_type, active_only=False)
+    present = set(combined["Fon Kodu"].astype(str).unique())
+    found = [c for c in codes if c in present]
+    missing = [c for c in codes if c not in present]
+    if missing:
+        print(f"[WARN] Veri setinde bulunamayan kodlar atlandı: {', '.join(missing)}")
+    if len(found) < 2:
+        raise SystemExit(f"[HATA] Karşılaştırılabilir en az 2 fon bulunamadı (bulunan: {found or 'yok'}).")
+
+    subset = combined[combined["Fon Kodu"].astype(str).isin(found)].copy()
+    met = metrics.compute_metrics(subset, risk_free_rate, keep_suspect=True)
+
+    # Verisi yetersiz fonları at (anlamlı metrik üretilemez).
+    thin = met["Veri_Noktasi_Sayisi"] < config.MIN_DATA_POINTS
+    if thin.any():
+        print(f"[WARN] Yetersiz veri ({config.MIN_DATA_POINTS} gözlemden az) nedeniyle atlanan: "
+              f"{', '.join(met.loc[thin, 'Fon Kodu'])}")
+        met = met[~thin].copy()
+    if len(met) < 2:
+        raise SystemExit("[HATA] Yeterli veriye sahip en az 2 fon kalmadı.")
+
+    order = {c: i for i, c in enumerate(found)}
+    met["_order"] = met["Fon Kodu"].map(order)
+    met = met.sort_values("_order").drop(columns="_order").reset_index(drop=True)
+
+    out = report.generate_comparison(met, subset, fund_type, risk_free_rate,
+                                     met["Fon Kodu"].tolist())
+    print(f"\n[DONE] Karşılaştırma raporu: {out}")
+    return 0
+
+
 def _read_parquet(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise FileNotFoundError(f"Önbellek yok: {path} — önce `tefas run` çalıştırın.")

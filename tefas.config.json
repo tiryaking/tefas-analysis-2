@@ -10,11 +10,11 @@
     "PARA PİYASASI",
     "BORÇLANMA ARAÇLARI",
     "ÖZEL FON",
-    "HİSSE SENEDİ",
+    "KISA VADELİ SERBEST",
     "ATLAS PORTFÖY SERBEST FON"
   ],
   "active_only": true,
-  "keep_suspect": true,
+  "keep_suspect": false,
   "min_aum": null,
   "min_fund_age": null,
   "write_report": true

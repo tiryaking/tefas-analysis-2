@@ -31,11 +31,24 @@ def _triangular(pct_series: pd.Series, peak: float = 50.0) -> pd.Series:
     return (1.0 - dist / max(peak, 100.0 - peak)) * 100.0
 
 
+def _col(df: pd.DataFrame, name: str) -> pd.Series:
+    """Sütun yoksa nötr (NaN) seri döndürür — skorlama kısmi tablolarda çökmesin."""
+    if name in df.columns:
+        return df[name]
+    return pd.Series(np.nan, index=df.index)
+
+
 def _consistency(df: pd.DataFrame) -> pd.Series:
-    return (_pct_rank(df["Pozitif_Gun_Orani"]) * 0.40 +
-            _pct_rank(df["Max_Drawdown"], ascending=False) * 0.30 +
-            _pct_rank(df["Skewness"]) * 0.20 +
-            _pct_rank(df["Sortino_Orani"]) * 0.10).fillna(50)
+    """
+    Tutarlılık skoru — Overall'daki metrikleri (drawdown/Sortino) TEKRAR
+    KULLANMAZ (çifte sayımı önler). Gürültülü günlük çarpıklık da çıkarıldı.
+    Bunun yerine getiri tutarlılığının doğrudan ölçüleri:
+        %45 pozitif GÜN oranı, %35 pozitif AY oranı, %20 düşük aylık dağılım.
+    Aylık ölçüler yoksa (kısmi tablo) günlük orana geri düşer.
+    """
+    return (_pct_rank(_col(df, "Pozitif_Gun_Orani")) * 0.45 +
+            _pct_rank(_col(df, "Pozitif_Ay_Orani")) * 0.35 +
+            _pct_rank(_col(df, "Aylik_Getiri_Std"), ascending=False) * 0.20).fillna(50)
 
 
 def _momentum(df: pd.DataFrame) -> pd.Series:
@@ -49,7 +62,10 @@ def _risk_profiles(df: pd.DataFrame, consistency: pd.Series) -> dict[str, pd.Ser
     sharpe = _pct_rank(df["Sharpe_Orani"])
     sortino = _pct_rank(df["Sortino_Orani"])
     calmar = _pct_rank(df["Calmar_Orani"])
-    ret_1y = _pct_rank(df["Getiri_1Y"])
+    # Getiri ekseni yıllıklandırılmış (CAGR) getiriyi kullanır; böylece 1 yıldan
+    # kısa geçmişli fonlar da aynı (yıllık) bazda kıyaslanır. Risk metrikleriyle
+    # (Sharpe/Sortino) tutarlı — hepsi Yillik_Getiri'yi esas alır.
+    ret_1y = _pct_rank(df["Yillik_Getiri"])
     pos_days = _pct_rank(df["Pozitif_Gun_Orani"])
     momentum_rank = _pct_rank(_momentum(df))
     vol_band_mid = _triangular(vol_pct, peak=50.0)
@@ -92,9 +108,11 @@ def score_funds(metrics: pd.DataFrame, combined: pd.DataFrame | None = None,
     for profile, scores in _risk_profiles(df, consistency).items():
         df[f"{profile}_Score"] = scores.round(1)
 
-    # Composite (Overall) skor — yüzdelik-sıra ağırlıklı.
-    # Sharpe ve Sortino yüksek korelasyonlu olduğundan (ikisi de risk-ayarlı
-    # getiri) toplam ağırlıkları azaltılıp getiri eksenine kaydırıldı.
+    # Composite (Overall) skor — yüzdelik-sıra ağırlıklı. Tek ve merkezi ağırlık
+    # tanımı: Sharpe %25, Sortino %15, düşük drawdown %20, yıllık getiri %25,
+    # tutarlılık %7,5, likidite %7,5. Sharpe/Sortino yüksek korelasyonlu
+    # olduğundan toplam ağırlıkları sınırlı; drawdown ve Sortino artık YALNIZCA
+    # burada yer alır (Consistency onları tekrar kullanmaz → çifte sayım yok).
     liq = (_pct_rank(df["Fon_Toplam_Deger_Milyon_TL"])
            if "Fon_Toplam_Deger_Milyon_TL" in df.columns
            else pd.Series(50.0, index=df.index))
@@ -102,9 +120,10 @@ def score_funds(metrics: pd.DataFrame, combined: pd.DataFrame | None = None,
         0.25 * _pct_rank(df["Sharpe_Orani"]) +
         0.15 * _pct_rank(df["Sortino_Orani"]) +
         0.20 * _pct_rank(df["Max_Drawdown"], ascending=False) +
-        # 1 yıldan kısa geçmişli fonlarda Getiri_1Y=NaN; nötr (50) yerine düşük
+        # Yıllıklandırılmış (CAGR) getiri — risk metrikleriyle aynı bazda. Çok kısa
+        # geçmişli fonlarda NaN olabilir (cagr min_days=63); nötr (50) yerine düşük
         # yüzdelikle (25) doldurulur ki kısa geçmiş yapay avantaj sağlamasın.
-        0.25 * _pct_rank(df["Getiri_1Y"], fill=25.0) +
+        0.25 * _pct_rank(df["Yillik_Getiri"], fill=25.0) +
         0.075 * consistency +
         0.075 * liq
     ).round(1)

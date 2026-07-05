@@ -125,14 +125,17 @@ def period_return(dates, prices, last_ts, offset) -> float:
     return float((prices[-1] - first) / first * 100.0)
 
 
-def net_return(gross_cagr: float) -> float:
-    """Yönetim ücreti + stopaj sonrası net getiri (yüzde)."""
-    if pd.isna(gross_cagr):
+def after_fee_return(gross: float) -> float:
+    """
+    Yönetim ücreti sonrası getiri (yüzde): brüt − MANAGEMENT_FEE_RATE.
+
+    NOT: Eski stopaj sezgiseli kaldırıldı (bkz. config). Türk fon vergisi tutuş
+    süresi/fon tipine bağlıdır ve bu veri setinde yoktur; bir *orana* stopaj
+    uygulamak boyutsal olarak da hatalıydı. Reel getiri için `real_return`.
+    """
+    if pd.isna(gross):
         return np.nan
-    after_fee = gross_cagr - config.MANAGEMENT_FEE_RATE
-    threshold = config.TUFE_RATE + config.TUFE_PLUS_THRESHOLD
-    stopaj = (after_fee - threshold) * config.STOPAJ_RATE if after_fee > threshold else 0.0
-    return float(after_fee - stopaj)
+    return float(gross - config.MANAGEMENT_FEE_RATE)
 
 
 def real_return(nominal: float, inflation: float = config.INFLATION_RATE) -> float:
@@ -151,7 +154,15 @@ def _round(x, dec=4):
 
 
 def compute_fund_metrics(group: pd.DataFrame, risk_free_rate: float) -> dict:
-    """Tek bir fon (long-format satırlar) için tüm metrikleri hesaplar."""
+    """
+    Tek bir fon (long-format satırlar) için tüm metrikleri hesaplar.
+
+    Risk metrikleri (volatilite, Sharpe, Sortino, Calmar, drawdown, VaR/CVaR,
+    çarpıklık, pozitif gün) tüm fonlarda **ortak gerilemeli pencerede**
+    (`config.SCORING_LOOKBACK_DAYS`, son ~1 işlem yılı) hesaplanır; böylece
+    farklı geçmiş uzunluğundaki fonlar aynı dönem üzerinden kıyaslanabilir.
+    `*_Kurulus` sütunları kuruluştan-bugüne (referans) değerleri saklar.
+    """
     group = group.sort_values("Tarih").reset_index(drop=True)
     prices = group["Fiyat"].to_numpy()
     dates = group["Tarih"].to_numpy()
@@ -159,20 +170,33 @@ def compute_fund_metrics(group: pd.DataFrame, risk_free_rate: float) -> dict:
     last_ts = pd.Timestamp(dates[-1])
     n_points = len(prices)
 
-    daily = pd.Series(prices).pct_change().replace([np.inf, -np.inf], np.nan).dropna() * 100
-    clean = clean_daily_returns(daily)
-
+    # Veri kalitesi TÜM seri üzerinden (herhangi bir gündeki sıçrama şüphelidir)
     quality = screen_price_series(prices, min_points=2,
                                   max_daily_move=config.DATA_QUALITY_MAX_DAILY_MOVE)
 
+    # Takvim-bazlı dönem getirileri (tanımı gereği zaten gerilemeli pencerede)
     g1a = period_return(dates, prices, last_ts, pd.DateOffset(months=1))
     g3a = period_return(dates, prices, last_ts, pd.DateOffset(months=3))
     g6a = period_return(dates, prices, last_ts, pd.DateOffset(months=6))
     g1y = period_return(dates, prices, last_ts, pd.DateOffset(years=1))
 
+    # Kuruluştan-bugüne (referans) — skorlamada KULLANILMAZ
+    cagr_incep = cagr(prices[0], last_price, n_points - 1)
+    daily_incep = pd.Series(prices).pct_change().replace([np.inf, -np.inf], np.nan).dropna() * 100
+    vol_incep = annualized_volatility(clean_daily_returns(daily_incep))
+
+    # ── Ortak gerilemeli pencere: son SCORING_LOOKBACK_DAYS gözlem ──────────────
+    lookback = config.SCORING_LOOKBACK_DAYS
+    windowed = n_points > lookback + 1
+    w_prices = prices[-(lookback + 1):] if windowed else prices
+    w_n = len(w_prices)
+
+    daily = pd.Series(w_prices).pct_change().replace([np.inf, -np.inf], np.nan).dropna() * 100
+    clean = clean_daily_returns(daily)
+
     vol = annualized_volatility(clean)
-    ann_return = cagr(prices[0], last_price, n_points - 1)
-    mdd = max_drawdown(prices)
+    ann_return = cagr(w_prices[0], w_prices[-1], w_n - 1)   # gerilemeli-1Y yıllıklandırılmış
+    mdd = max_drawdown(w_prices)
 
     sharpe = sharpe_ratio(ann_return, vol, risk_free_rate)
     sortino = sortino_ratio(clean, ann_return, risk_free_rate)
@@ -189,6 +213,20 @@ def compute_fund_metrics(group: pd.DataFrame, risk_free_rate: float) -> dict:
         var95 = np.percentile(daily, 5)
         var99 = np.percentile(daily, 1)
         cvar95 = daily[daily <= var95].mean()
+
+    # Aylık tutarlılık (pencere içi): pozitif ay oranı ve aylık getiri dağılımı.
+    # Günlük gürültüden bağımsız, tutarlılık skoru için (bkz. scoring._consistency).
+    w_dates = dates[-(lookback + 1):] if windowed else dates
+    poz_ay = aylik_std = np.nan
+    try:
+        pidx = pd.to_datetime(w_dates)
+        month_last = pd.Series(w_prices, index=pidx).groupby(pidx.to_period("M")).last()
+        monthly = month_last.pct_change().dropna() * 100.0
+        if len(monthly) >= 2:
+            poz_ay = float((monthly > 0).sum() / len(monthly) * 100.0)
+            aylik_std = float(monthly.std())
+    except Exception:  # noqa: BLE001
+        pass
 
     # AUM
     aum = np.nan
@@ -216,7 +254,10 @@ def compute_fund_metrics(group: pd.DataFrame, risk_free_rate: float) -> dict:
         "Getiri_6A": _round(g6a), "Getiri_1Y": _round(g1y),
         "Basit_Getiri": _round(basit),
         "Yillik_Getiri": _round(ann_return),
-        "Net_Getiri_1Y": _round(net_return(ann_return)),
+        "Yillik_Getiri_Kurulus": _round(cagr_incep),
+        "Volatilite_Kurulus": _round(vol_incep),
+        "Skor_Penceresi_Gun": w_n,
+        "Net_Getiri_1Y": _round(after_fee_return(ann_return)),
         "Reel_Getiri_1Y": _round(real_return(ann_return)) if config.REAL_RETURN_ENABLED else np.nan,
         "Fazla_Getiri": _round(ann_return - risk_free_rate) if pd.notna(ann_return) else np.nan,
         "Yillik_Volatilite": _round(vol),
@@ -228,6 +269,8 @@ def compute_fund_metrics(group: pd.DataFrame, risk_free_rate: float) -> dict:
         "Skewness": _round(skew),
         "En_Kotu_Gun": _round(en_kotu), "En_Iyi_Gun": _round(en_iyi),
         "Pozitif_Gun_Orani": _round(poz),
+        "Pozitif_Ay_Orani": _round(poz_ay, 2),
+        "Aylik_Getiri_Std": _round(aylik_std),
     }
 
 
@@ -235,8 +278,15 @@ def compute_metrics(combined: pd.DataFrame, risk_free_rate: float = 0.0,
                     keep_suspect: bool = False, min_aum: float | None = None,
                     min_fund_age: float | None = None) -> pd.DataFrame:
     """
-    Birleşik (long) veriden fon-başına metrik tablosu üretir; veri-kalitesi,
-    risksiz-faiz, AUM ve yaş filtrelerini uygular.
+    Birleşik (long) veriden fon-başına metrik tablosu üretir.
+
+    Veri-kalitesi (şüpheli sıçrama) satırları elenir. Risksiz-faiz / AUM / yaş
+    kriterleri artık satırları DÜŞÜRMEZ; bunun yerine bir **uygunluk maskesi**
+    (`Uygun`) olarak eklenir. Böylece yüzdelik-sıra skorları tüm (kalitesi
+    geçerli) evren üzerinden hesaplanır ve seçim/öneri aşamasında `Uygun`
+    filtresi uygulanır (sıralamayı seçimden ayırır). rf karşılaştırması
+    boyutsal olarak doğru biçimde yıllıklandırılmış getiri (`Yillik_Getiri`)
+    üzerinden yapılır.
     """
     combined = combined.copy()
     combined["Tarih"] = pd.to_datetime(combined["Tarih"])
@@ -251,23 +301,25 @@ def compute_metrics(combined: pd.DataFrame, risk_free_rate: float = 0.0,
     if df.empty:
         return df
 
-    # Veri kalitesi filtresi
+    # Veri kalitesi filtresi (gerçek satır düşürme — bozuk seriler)
     suspect = df["Veri_Kalitesi"] == QUALITY_SUSPECT
     n_suspect = int(suspect.sum())
     if n_suspect and not keep_suspect:
         print(f"[INFO] Veri kalitesi: {n_suspect} şüpheli fon sıralamadan çıkarıldı.")
         df = df[~suspect].copy()
 
-    # Risksiz faiz filtresi (getirisi rf altında olanları ele; NaN getiriyi tut)
+    # Uygunluk maskesi — satır düşürmez, seçim aşamasında kullanılır.
+    eligible = pd.Series(True, index=df.index)
     if risk_free_rate > 0:
-        before = len(df)
-        df = df[(df["Getiri_1Y"] > risk_free_rate) | (df["Getiri_1Y"].isna())].copy()
-        print(f"[INFO] Risksiz faiz (%{risk_free_rate:.1f}) filtresi: {before - len(df)} fon elendi.")
-
+        # Yıllıklandırılmış getiri rf üzerinde olmalı; getirisi bilinmeyen
+        # (NaN) genç fonlar uygunluk dışı sayılır (yapay avantaj vermesin).
+        eligible &= df["Yillik_Getiri"] > risk_free_rate
     if min_aum is not None:
-        df = df[(df["Fon_Toplam_Deger_Milyon_TL"] >= min_aum) |
-                (df["Fon_Toplam_Deger_Milyon_TL"].isna())].copy()
+        eligible &= (df["Fon_Toplam_Deger_Milyon_TL"] >= min_aum) | df["Fon_Toplam_Deger_Milyon_TL"].isna()
     if min_fund_age is not None:
-        df = df[(df["Fon_Yasi_Yil"] >= min_fund_age) | (df["Fon_Yasi_Yil"].isna())].copy()
+        eligible &= (df["Fon_Yasi_Yil"] >= min_fund_age) | df["Fon_Yasi_Yil"].isna()
+    df["Uygun"] = eligible.fillna(False).astype(bool)
+    n_elig = int(df["Uygun"].sum())
+    print(f"[INFO] Uygunluk: {n_elig} / {len(df)} fon seçim kriterlerini (rf/AUM/yaş) karşılıyor.")
 
     return df.reset_index(drop=True)

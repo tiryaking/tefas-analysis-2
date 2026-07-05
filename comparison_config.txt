@@ -1,0 +1,17 @@
+# TEFAS Fon Karşılaştırma listesi
+# ----------------------------------
+# Karşılaştırmak istediğin fon KODLARINI buraya yaz (satır başına bir kod).
+# `#` ile başlayan satırlar ve boş satırlar yok sayılır.
+# İstersen [COMPARE] başlığı da kullanabilirsin (zorunlu değil).
+#
+# Çalıştırma:
+#   tefas compare --fund-type YAT --risk-free-rate 45
+#   tefas compare --codes PRY,PBR,BMU        # dosya yerine komut satırından
+#
+# Not: Kodlar "olduğu gibi" karşılaştırılır — aktiflik/rf/AUM/yaş filtreleri
+# uygulanmaz; yalnızca verisi kullanılamayacak kadar az olan fon atlanır.
+
+[COMPARE]
+BSM
+BMU
+BBS

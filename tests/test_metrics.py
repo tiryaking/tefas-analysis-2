@@ -54,11 +54,11 @@ def test_calmar_ratio():
     assert np.isnan(m.calmar_ratio(np.nan, 25, 10))
 
 
-def test_net_return():
-    # gross 70 -> fee -1 = 69; eşik 60; stopaj (69-60)*0.15=1.35; net 67.65
-    assert m.net_return(70) == pytest.approx(67.65)
-    # eşiğin altında stopaj yok: gross 40 -> 39
-    assert m.net_return(40) == pytest.approx(39.0)
+def test_after_fee_return():
+    # Yalnızca yönetim ücreti (%1) düşülür; geçersiz stopaj sezgiseli kaldırıldı.
+    assert m.after_fee_return(70) == pytest.approx(69.0)
+    assert m.after_fee_return(40) == pytest.approx(39.0)
+    assert np.isnan(m.after_fee_return(np.nan))
 
 
 def test_real_return():
@@ -87,6 +87,62 @@ def test_compute_metrics_integration():
     out = m.compute_metrics(combined, risk_free_rate=0.0)
     assert set(out["Fon Kodu"]) == {"AAA", "BBB"}
     assert {"Sharpe_Orani", "Yillik_Getiri", "Max_Drawdown"} <= set(out.columns)
+    # Yeni sütunlar: pencere/kuruluş referansları, aylık tutarlılık, uygunluk
+    assert {"Yillik_Getiri_Kurulus", "Volatilite_Kurulus", "Skor_Penceresi_Gun",
+            "Pozitif_Ay_Orani", "Uygun"} <= set(out.columns)
     # Yükselen seri: pozitif yıllık getiri, drawdown ~0
     assert (out["Yillik_Getiri"] > 0).all()
     assert (out["Max_Drawdown"].fillna(0) < 1).all()
+    # 120 gözlem < 253 → pencere tüm seri, kuruluş referansı ile örtüşür
+    assert (out["Skor_Penceresi_Gun"] == 120).all()
+    assert out["Yillik_Getiri"].to_numpy() == pytest.approx(out["Yillik_Getiri_Kurulus"].to_numpy())
+
+
+def test_trailing_window_slicing():
+    """Uzun geçmişli fonlarda risk metrikleri son SCORING_LOOKBACK_DAYS gözleme kırpılır."""
+    from tefas import config
+    lb = config.SCORING_LOOKBACK_DAYS
+    # İlk yarı düz (getiri yok), son pencere güçlü yükseliş → windowed CAGR yüksek,
+    # kuruluş CAGR daha düşük olmalı.
+    n = lb + 200
+    rng = pd.date_range("2023-01-02", periods=n, freq="B")
+    prices, price = [], 100.0
+    for i in range(n):
+        price *= 1.0 if i < 200 else 1.001
+        prices.append(price)
+    combined = pd.DataFrame({"Fon Kodu": "AAA", "Fon Adi": "AAA FON",
+                             "Tarih": rng, "Fiyat": prices, "Fon Toplam Deger": 5e8})
+    out = m.compute_metrics(combined, risk_free_rate=0.0).iloc[0]
+    assert out["Skor_Penceresi_Gun"] == lb + 1                 # yalnızca son pencere
+    assert out["Yillik_Getiri"] > out["Yillik_Getiri_Kurulus"]  # pencere kuruluşu aşar
+
+
+def test_short_fund_return_annualized():
+    """1 yıldan kısa geçmişli fonda Yillik_Getiri (yıllıklandırılmış) > Getiri_1Y (kümülatif)."""
+    rng = pd.date_range("2025-06-01", periods=170, freq="B")   # ~8 ay
+    price, rows = 100.0, []
+    for d in rng:
+        price *= 1.002
+        rows.append({"Fon Kodu": "SHT", "Fon Adi": "SHORT FON", "Tarih": d,
+                     "Fiyat": price, "Fon Toplam Deger": 5e8})
+    out = m.compute_metrics(pd.DataFrame(rows), risk_free_rate=0.0).iloc[0]
+    assert out["Skor_Penceresi_Gun"] < 252                     # 1 yıldan kısa
+    assert out["Getiri_1Y"] > 0 and out["Yillik_Getiri"] > 0
+    assert out["Yillik_Getiri"] > out["Getiri_1Y"]            # yıllıklandırma kümülatifi aşar
+
+
+def test_eligibility_mask_not_dropped():
+    """rf filtresi satır DÜŞÜRMEZ; Uygun maskesi olarak eklenir."""
+    rng = pd.date_range("2025-01-01", periods=300, freq="B")
+    rows = []
+    for code, drift in [("HIGH", 1.003), ("LOW", 1.0002)]:
+        price = 100.0
+        for d in rng:
+            price *= drift
+            rows.append({"Fon Kodu": code, "Fon Adi": f"{code} FON",
+                         "Tarih": d, "Fiyat": price, "Fon Toplam Deger": 5e8})
+    combined = pd.DataFrame(rows)
+    out = m.compute_metrics(combined, risk_free_rate=45.0)
+    assert set(out["Fon Kodu"]) == {"HIGH", "LOW"}     # ikisi de KORUNUR
+    elig = dict(zip(out["Fon Kodu"], out["Uygun"]))
+    assert elig["HIGH"] and not elig["LOW"]            # sadece yüksek getirili uygun

@@ -28,19 +28,34 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "tefas.config.json"
 # filtreleri bu dosyadan yükleyebilir; `--config filter_config.txt` ile de okunur.
 DEFAULT_FILTER_PATH = PROJECT_ROOT / "filter_config.txt"
 
+# Karşılaştırma modu: karşılaştırılacak fon kodlarının listelendiği düz-metin
+# dosyası (satır başına bir kod; `#` yorum). `tefas compare` bunu okur.
+DEFAULT_COMPARISON_PATH = PROJECT_ROOT / "comparison_config.txt"
+
 # ─── Analiz parametreleri ─────────────────────────────────────────────────────
 MIN_DATA_POINTS = 20
 TRADING_DAYS_PER_YEAR = 252
+
+# Skorlamada kullanılan risk metrikleri (volatilite, Sharpe, Sortino, Calmar,
+# drawdown, VaR) tüm fonlarda **ortak, gerilemeli (trailing) pencerede**
+# hesaplanır ki farklı geçmiş uzunluğundaki fonlar aynı dönem üzerinden
+# kıyaslanabilsin. Varsayılan ~1 işlem yılı (252 gözlem). Bundan uzun geçmişli
+# fonlar son bu kadar gözleme kırpılır; daha kısa geçmişliler tüm geçmişini
+# kullanır ve tablolarda `*` ile işaretlenir.
+SCORING_LOOKBACK_DAYS = 252
 
 # ─── Veri kalitesi ────────────────────────────────────────────────────────────
 DATA_QUALITY_MAX_DAILY_MOVE = 35.0   # tek-günlük mutlak hareket sınırı (%)
 DAILY_RETURN_CLIP = 25.0             # volatilite/Sortino için winsorize bandı (%)
 
-# ─── Ücret / stopaj / makro ───────────────────────────────────────────────────
+# ─── Ücret / makro ────────────────────────────────────────────────────────────
+# NOT: Eski `net_return` stopaj sezgiseli (yıllıklandırılmış CAGR üzerinden
+# enflasyon+5 eşiği aşımına %15) hem Türk fon vergilendirmesini yanlış modelliyor
+# hem de bir *orana* vergi uygulayarak boyutsal olarak hatalıydı; kaldırıldı.
+# `Net_Getiri_1Y` artık yalnızca yönetim ücreti düşülmüş getiridir; işlem
+# vergileri modellenmez (reel getiri için `Reel_Getiri_1Y` kullanılır).
 MANAGEMENT_FEE_RATE = 1.0
 TUFE_RATE = 55.0
-TUFE_PLUS_THRESHOLD = 5.0
-STOPAJ_RATE = 0.15
 INFLATION_RATE = 55.0
 POLICY_RATE = 50.0
 REAL_RETURN_ENABLED = True
@@ -51,6 +66,7 @@ MIN_FUND_AGE_YEARS = None
 
 # ─── Rapor / PDF ──────────────────────────────────────────────────────────────
 CONSOLIDATED_REPORT_BASENAME = "tefas_premium_rapor"
+COMPARISON_REPORT_BASENAME = "tefas_karsilastirma"
 FONT_CANDIDATES = [
     r"C:\Windows\Fonts\ARIALUNI.TTF",
     r"C:\Windows\Fonts\segoeui.ttf",
@@ -82,6 +98,7 @@ class Paths:
     scored_parquet: Path
     scored_csv: Path
     report_pdf: Path
+    comparison_pdf: Path
 
 
 def paths_for(fund_type: str) -> Paths:
@@ -100,4 +117,5 @@ def paths_for(fund_type: str) -> Paths:
         scored_parquet=OUTPUT_DIR / f"advanced_portfolio_recommendations_{suffix}.parquet",
         scored_csv=OUTPUT_DIR / f"advanced_portfolio_recommendations_{suffix}.csv",
         report_pdf=REPORTS_DIR / f"{CONSOLIDATED_REPORT_BASENAME}_{suffix}.pdf",
+        comparison_pdf=REPORTS_DIR / f"{COMPARISON_REPORT_BASENAME}_{suffix}.pdf",
     )

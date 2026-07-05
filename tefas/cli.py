@@ -53,6 +53,25 @@ def _parse_filter_file(text):
     return {"include": include or None, "exclude": exclude or None}
 
 
+def _parse_comparison_file(text):
+    """Karşılaştırma dosyasından fon kodlarını ayrıştır.
+
+    Satır başına bir kod; boş satırlar, `#` yorumları ve `[...]` bölüm başlıkları
+    (örn. `[COMPARE]`) yok sayılır. Kodlar büyük harfe çevrilir; sıra korunur,
+    yinelenenler atlanır.
+    """
+    codes, seen = [], set()
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or (s.startswith("[") and s.endswith("]")):
+            continue
+        code = s.split()[0].upper()   # olası açıklamaları at, ilk token = kod
+        if code not in seen:
+            seen.add(code)
+            codes.append(code)
+    return codes
+
+
 def _load_config(path):
     """Çalıştırma ayarlarını dosyadan oku.
 
@@ -153,6 +172,7 @@ def _interactive() -> int:
         "Hangi işlemi çalıştıralım?",
         [
             ("run", "Tüm pipeline (ETL -> metrik -> skor -> rapor)"),
+            ("compare", "Fon karşılaştırma (belirli kodları yan yana)"),
             ("etl", "Yalnızca ETL (combined parquet)"),
             ("metrics", "Yalnızca metrik hesabı"),
             ("score", "Yalnızca skorlama"),
@@ -172,6 +192,24 @@ def _interactive() -> int:
     if cmd != "etl":
         rfr = _ask_float("Risksiz faiz oranı (%)", 45.0)
         argv += ["--risk-free-rate", str(rfr)]
+
+    if cmd == "compare":
+        csrc = _ask_choice(
+            "Karşılaştırılacak fon kodları nereden gelsin?",
+            [("file", f"Dosyadan yükle ({config.DEFAULT_COMPARISON_PATH.name})"),
+             ("manual", "Elle gir (virgülle)")],
+            default="file",
+        )
+        if csrc == "file":
+            path = input(f"Karşılaştırma dosyası yolu (Enter={config.DEFAULT_COMPARISON_PATH.name}): ").strip().strip('"') \
+                or str(config.DEFAULT_COMPARISON_PATH)
+            argv += ["--config", path]
+        else:
+            raw = input("Fon kodları (virgülle, örn. PRY,PBR,BMU): ").strip()
+            if raw:
+                argv += ["--codes", raw]
+        print("\n>>> Çalıştırılıyor: tefas " + " ".join(argv) + "\n")
+        return main(argv)
 
     if cmd in ("run", "etl"):
         if not _ask_yes_no("Yalnızca aktif fonlar (platform_status filtresi)?", default=True):
@@ -210,6 +248,28 @@ def _interactive() -> int:
 
     print("\n>>> Çalıştırılıyor: tefas " + " ".join(argv) + "\n")
     return main(argv)
+
+
+def _run_compare(args) -> int:
+    """`tefas compare` — belirli fon kodlarını karşılaştıran PDF üretir."""
+    from pathlib import Path
+    fund_type = (args.fund_type or "YAT").upper()
+    rfr = args.risk_free_rate if args.risk_free_rate is not None else 45.0
+
+    if args.codes:
+        codes = _parse_comparison_file(args.codes.replace(",", "\n"))
+    else:
+        cfg_path = Path(args.config) if args.config else config.DEFAULT_COMPARISON_PATH
+        if not cfg_path.exists():
+            raise SystemExit(
+                f"[HATA] Karşılaştırma dosyası bulunamadı: {cfg_path}\n"
+                f"        Kodları --codes PRY,PBR,BMU ile de verebilirsin.")
+        codes = _parse_comparison_file(cfg_path.read_text(encoding="utf-8"))
+
+    if len(codes) < 2:
+        raise SystemExit(f"[HATA] Karşılaştırma için en az 2 fon kodu gerekir (bulunan: {codes or 'yok'}).")
+
+    return pipeline.run_comparison(fund_type, rfr, codes)
 
 
 def main(argv=None) -> int:
@@ -251,7 +311,18 @@ def main(argv=None) -> int:
     prep = sub.add_parser("report", help="PDF rapor üret (skorlu + metrik parquet'ten)")
     _common(prep)
 
+    pc = sub.add_parser("compare", help="Belirli fonları karşılaştır (tablo + grafik PDF)")
+    _common(pc)
+    pc.add_argument("--codes", default=None,
+                    help="Karşılaştırılacak fon kodları, virgülle: PRY,PBR,BMU (dosyayı ezer)")
+    pc.add_argument("--config", nargs="?", default=None, const=str(config.DEFAULT_COMPARISON_PATH),
+                    metavar="PATH",
+                    help=f"Kod listesi dosyası (varsayılan: {config.DEFAULT_COMPARISON_PATH.name})")
+
     args = parser.parse_args(argv)
+
+    if args.cmd == "compare":
+        return _run_compare(args)
 
     # Config dosyası (yalnızca run destekler); CLI argümanları config'i ezer.
     cfg = _load_config(args.config) if getattr(args, "config", None) else {}

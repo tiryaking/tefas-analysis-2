@@ -54,6 +54,33 @@ def test_returns_matrix_aligns_common_dates():
     assert np.allclose(rets["AAA"].to_numpy(), [10.0, 10.0, 10.0])   # ilk gün pct_change NaN -> düşer
 
 
+def test_risk_contributions_sum_to_one():
+    a = [1.0, -1.0, 1.0, -1.0]
+    b = [1.0, 1.0, -1.0, -1.0]
+    df = pd.DataFrame({"A": a, "B": b})
+    rc = pf.risk_contributions(df, [0.5, 0.5])
+    assert rc.sum() == pytest.approx(1.0, rel=1e-9)
+    # Eşit vol + korelasyonsuz + eşit ağırlık -> eşit risk katkısı
+    assert rc[0] == pytest.approx(0.5) and rc[1] == pytest.approx(0.5)
+
+
+def test_portfolio_drawdown_shape():
+    rng = pd.date_range("2025-01-01", periods=40, freq="B")
+    rows = []
+    for code in ("AAA", "BBB"):
+        price = 100.0
+        for i, d in enumerate(rng):
+            price *= 1.01 if i % 5 else 0.97      # ara ara düşüş -> drawdown oluşsun
+            rows.append({"Tarih": d, "Fon Kodu": code, "Fiyat": price})
+    combined = pd.DataFrame(rows)
+    portfolio = [{"Fon Kodu": "AAA", "Agirlik": 60.0}, {"Fon Kodu": "BBB", "Agirlik": 40.0}]
+    res = pf.portfolio_drawdown(combined, portfolio)
+    assert res is not None
+    idx, cum, dd = res
+    assert len(cum) == len(dd) == len(idx)
+    assert (dd >= -1e-9).all()                    # drawdown negatif olmamalı (pozitif % kayıp)
+
+
 def test_portfolio_risk_summary():
     rng = pd.date_range("2025-01-01", periods=60, freq="B")
     rows = []

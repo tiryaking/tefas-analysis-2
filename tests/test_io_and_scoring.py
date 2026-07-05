@@ -52,6 +52,18 @@ def test_triangular_peaks_at_center():
     assert t.iloc[0] == 0.0 and t.iloc[2] == 0.0
 
 
+def test_consistency_no_double_count():
+    """_consistency artık Max_Drawdown/Sortino/Skewness'a bağlı DEĞİL (çifte sayım yok)."""
+    df = pd.DataFrame({
+        "Pozitif_Gun_Orani": np.linspace(45, 60, 10),
+        "Pozitif_Ay_Orani": np.linspace(40, 70, 10),
+        "Aylik_Getiri_Std": np.linspace(2, 20, 10),
+    })  # Max_Drawdown / Sortino / Skewness bilinçli olarak YOK
+    c = scoring._consistency(df)
+    assert c.between(0, 100).all()
+    assert c.iloc[-1] > c.iloc[0]     # daha çok pozitif gün/ay -> daha yüksek tutarlılık
+
+
 def test_score_funds_adds_columns():
     """Skorlama metrik tablosuna beklenen skor sütunlarını ekler."""
     df = pd.DataFrame({
