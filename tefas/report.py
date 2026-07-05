@@ -175,7 +175,9 @@ def _make_table(headers, rows, col_widths, styles, align_right_from=2):
 
 
 def _chart(fig, path):
-    fig.savefig(path, dpi=150, bbox_inches="tight", facecolor="white")
+    # 300 dpi: PDF'te grafikler sayfa genişliğine (~236 mm) ölçeklendiği için
+    # 150 dpi ekranda/yakınlaştırmada bulanık kalıyordu; baskı kalitesi 300.
+    fig.savefig(path, dpi=300, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     return str(path)
 
