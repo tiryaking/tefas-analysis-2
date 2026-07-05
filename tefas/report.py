@@ -34,7 +34,8 @@ from reportlab.platypus import (
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-from . import config, portfolio as pf
+from . import config, portfolio as pf, themes
+from .themes import fund_theme  # geriye uyumluluk: report.fund_theme kullanılıyordu
 
 NAVY = colors.HexColor("#13294b")
 BLUE = colors.HexColor("#1f5fb0")
@@ -119,31 +120,6 @@ def _code_label(row) -> str:
     if pd.notna(n) and n < config.TRADING_DAYS_PER_YEAR:
         return code + "*"
     return code
-
-
-_THEMES = [
-    ("Para Piyasası", ["PARA P", "KISA VADEL", "LIKIT"]),
-    ("Borçlanma Araçları", ["BORCLANMA", "BORÇLANMA", "TAHVIL", "BONO", "EUROBOND"]),
-    ("Kira Sertifikası", ["KIRA SERT", "SUKUK"]),
-    ("Katılım", ["KATILIM", "PARTICIPATION"]),
-    ("Hisse Senedi", ["HISSE", "HİSSE", "SENED", "EQUITY", "PAY"]),
-    ("Teknoloji", ["TEKNOLOJ", "TEKNO", "TECH", "YAPAY ZEKA", "BILISIM"]),
-    ("Altın & Kıymetli Maden", ["ALTIN", "GUMUS", "GÜMÜŞ", "GOLD", "KIYMETLI"]),
-    ("Emtia & Enerji", ["EMTIA", "EMTİA", "ENERJ", "PETROL", "ENERGY"]),
-    ("Yabancı / Endeks", ["YABANCI", "S&P", "SP500", "NASDAQ", "MSCI", "ENDEKS", "INDEX"]),
-    ("Fon Sepeti", ["FON SEPET", "FUND OF"]),
-    ("Karma / Değişken", ["KARMA", "DEGISKEN", "DEĞİŞKEN", "BALANCED", "SERBEST"]),
-]
-
-
-def fund_theme(name):
-    if pd.isna(name):
-        return "Diğer"
-    up = str(name).upper()
-    for theme, kws in _THEMES:
-        if any(k in up for k in kws):
-            return theme
-    return "Diğer"
 
 
 def build_rationale(row):
