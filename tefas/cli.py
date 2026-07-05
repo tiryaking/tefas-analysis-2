@@ -190,7 +190,7 @@ def _interactive() -> int:
     argv = [cmd, "--fund-type", fund_type]
 
     if cmd != "etl":
-        rfr = _ask_float("Risksiz faiz oranı (%)", 45.0)
+        rfr = _ask_float("Risksiz faiz oranı (%)", config.macro().risk_free_rate)
         argv += ["--risk-free-rate", str(rfr)]
 
     if cmd == "compare":
@@ -254,7 +254,7 @@ def _run_compare(args) -> int:
     """`tefas compare` — belirli fon kodlarını karşılaştıran PDF üretir."""
     from pathlib import Path
     fund_type = (args.fund_type or "YAT").upper()
-    rfr = args.risk_free_rate if args.risk_free_rate is not None else 45.0
+    rfr = args.risk_free_rate if args.risk_free_rate is not None else config.macro().risk_free_rate
 
     if args.codes:
         codes = _parse_comparison_file(args.codes.replace(",", "\n"))
@@ -328,7 +328,7 @@ def main(argv=None) -> int:
     cfg = _load_config(args.config) if getattr(args, "config", None) else {}
 
     fund_type = (args.fund_type or cfg.get("fund_type") or "YAT").upper()
-    rfr = args.risk_free_rate if args.risk_free_rate is not None else cfg.get("risk_free_rate", 45.0)
+    rfr = args.risk_free_rate if args.risk_free_rate is not None else cfg.get("risk_free_rate", config.macro().risk_free_rate)
     paths = config.paths_for(fund_type)
 
     if args.cmd == "run":

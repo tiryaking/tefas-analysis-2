@@ -125,9 +125,10 @@ def period_return(dates, prices, last_ts, offset) -> float:
     return float((prices[-1] - first) / first * 100.0)
 
 
-def after_fee_return(gross: float) -> float:
+def after_fee_return(gross: float, fee: float | None = None) -> float:
     """
-    Yönetim ücreti sonrası getiri (yüzde): brüt − MANAGEMENT_FEE_RATE.
+    Yönetim ücreti sonrası getiri (yüzde): brüt − yönetim ücreti (puan).
+    `fee=None` → `tefas.config.json`'daki `management_fee_rate` kullanılır.
 
     NOT: Eski stopaj sezgiseli kaldırıldı (bkz. config). Türk fon vergisi tutuş
     süresi/fon tipine bağlıdır ve bu veri setinde yoktur; bir *orana* stopaj
@@ -135,13 +136,18 @@ def after_fee_return(gross: float) -> float:
     """
     if pd.isna(gross):
         return np.nan
-    return float(gross - config.MANAGEMENT_FEE_RATE)
+    if fee is None:
+        fee = config.macro().management_fee_rate
+    return float(gross - fee)
 
 
-def real_return(nominal: float, inflation: float = config.INFLATION_RATE) -> float:
-    """Fisher denklemiyle enflasyondan arındırılmış reel getiri (yüzde)."""
+def real_return(nominal: float, inflation: float | None = None) -> float:
+    """Fisher denklemiyle enflasyondan arındırılmış reel getiri (yüzde).
+    `inflation=None` → `tefas.config.json`'daki `inflation_rate` kullanılır."""
     if pd.isna(nominal):
         return np.nan
+    if inflation is None:
+        inflation = config.macro().inflation_rate
     return float(((1 + nominal / 100) / (1 + inflation / 100) - 1) * 100)
 
 
@@ -280,13 +286,16 @@ def compute_metrics(combined: pd.DataFrame, risk_free_rate: float = 0.0,
     """
     Birleşik (long) veriden fon-başına metrik tablosu üretir.
 
-    Veri-kalitesi (şüpheli sıçrama) satırları elenir. Risksiz-faiz / AUM / yaş
-    kriterleri artık satırları DÜŞÜRMEZ; bunun yerine bir **uygunluk maskesi**
-    (`Uygun`) olarak eklenir. Böylece yüzdelik-sıra skorları tüm (kalitesi
-    geçerli) evren üzerinden hesaplanır ve seçim/öneri aşamasında `Uygun`
-    filtresi uygulanır (sıralamayı seçimden ayırır). rf karşılaştırması
-    boyutsal olarak doğru biçimde yıllıklandırılmış getiri (`Yillik_Getiri`)
-    üzerinden yapılır.
+    Veri-kalitesi (şüpheli sıçrama) satırları elenir. AUM / yaş kriterleri
+    satırları DÜŞÜRMEZ; bir **uygunluk maskesi** (`Uygun`) olarak eklenir.
+    Böylece yüzdelik-sıra skorları tüm (kalitesi geçerli) evren üzerinden
+    hesaplanır ve seçim/öneri aşamasında `Uygun` filtresi uygulanır
+    (sıralamayı seçimden ayırır).
+
+    rf artık uygunluk kriteri DEĞİL, bilgilendirici bir bayraktır (`Rf_Ustu`):
+    yıllıklandırılmış getirisi rf üzerinde olan fonlar işaretlenir; getirisi
+    bilinmeyen (NaN) genç fonlar False sayılır. Karşılaştırma boyutsal olarak
+    doğru biçimde yıllıklandırılmış getiri (`Yillik_Getiri`) üzerinden yapılır.
     """
     combined = combined.copy()
     combined["Tarih"] = pd.to_datetime(combined["Tarih"])
@@ -308,18 +317,22 @@ def compute_metrics(combined: pd.DataFrame, risk_free_rate: float = 0.0,
         print(f"[INFO] Veri kalitesi: {n_suspect} şüpheli fon sıralamadan çıkarıldı.")
         df = df[~suspect].copy()
 
-    # Uygunluk maskesi — satır düşürmez, seçim aşamasında kullanılır.
-    eligible = pd.Series(True, index=df.index)
+    # rf bayrağı — bilgilendirici, uygunluğu etkilemez. Getirisi bilinmeyen
+    # (NaN) genç fonlar rf üzeri sayılmaz (yapay avantaj vermesin).
     if risk_free_rate > 0:
-        # Yıllıklandırılmış getiri rf üzerinde olmalı; getirisi bilinmeyen
-        # (NaN) genç fonlar uygunluk dışı sayılır (yapay avantaj vermesin).
-        eligible &= df["Yillik_Getiri"] > risk_free_rate
+        df["Rf_Ustu"] = (df["Yillik_Getiri"] > risk_free_rate).fillna(False).astype(bool)
+    else:
+        df["Rf_Ustu"] = df["Yillik_Getiri"].notna()
+
+    # Uygunluk maskesi (AUM/yaş) — satır düşürmez, seçim aşamasında kullanılır.
+    eligible = pd.Series(True, index=df.index)
     if min_aum is not None:
         eligible &= (df["Fon_Toplam_Deger_Milyon_TL"] >= min_aum) | df["Fon_Toplam_Deger_Milyon_TL"].isna()
     if min_fund_age is not None:
         eligible &= (df["Fon_Yasi_Yil"] >= min_fund_age) | df["Fon_Yasi_Yil"].isna()
     df["Uygun"] = eligible.fillna(False).astype(bool)
     n_elig = int(df["Uygun"].sum())
-    print(f"[INFO] Uygunluk: {n_elig} / {len(df)} fon seçim kriterlerini (rf/AUM/yaş) karşılıyor.")
+    print(f"[INFO] Uygunluk: {n_elig} / {len(df)} fon seçim kriterlerini (AUM/yaş) karşılıyor.")
+    print(f"[INFO] rf üzeri getiri: {int(df['Rf_Ustu'].sum())} / {len(df)} fon.")
 
     return df.reset_index(drop=True)

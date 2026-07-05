@@ -327,8 +327,8 @@ def _chart_distribution(df, top_codes, rf, path):
     rlo, rhi = np.percentile(ret, 1), np.percentile(ret, 99)
     ax1.hist(ret.clip(rlo, rhi), bins=40, color=MPL_BLUE, alpha=0.75, edgecolor="white", linewidth=0.3)
     for val, col, lbl in [(rf, MPL_GREY, f"rf %{rf:.0f}"),
-                          (config.INFLATION_RATE, "#c0392b", f"TÜFE %{config.INFLATION_RATE:.0f}"),
-                          (config.POLICY_RATE, "#e0a526", f"Politika %{config.POLICY_RATE:.0f}")]:
+                          (config.macro().inflation_rate, "#c0392b", f"TÜFE %{config.macro().inflation_rate:.0f}"),
+                          (config.macro().policy_rate, "#e0a526", f"Politika %{config.macro().policy_rate:.0f}")]:
         if rlo <= val <= rhi:
             ax1.axvline(val, color=col, linestyle="--", linewidth=1.2, label=lbl)
     top_ret = pd.to_numeric(d[d["Fon Kodu"].isin(top_codes)]["Yillik_Getiri"], errors="coerce").dropna()
@@ -367,8 +367,8 @@ def _chart_benchmark_bars(df, rf, path):
     ret = pd.to_numeric(df["Yillik_Getiri"], errors="coerce")
     real = pd.to_numeric(df.get("Reel_Getiri_1Y"), errors="coerce") if "Reel_Getiri_1Y" in df.columns else None
     items = [(f"Mevduat / rf (%{rf:.0f})", float((ret > rf).mean() * 100)),
-             (f"Politika faizi (%{config.POLICY_RATE:.0f})", float((ret > config.POLICY_RATE).mean() * 100)),
-             (f"Enflasyon (%{config.INFLATION_RATE:.0f})", float((ret > config.INFLATION_RATE).mean() * 100))]
+             (f"Politika faizi (%{config.macro().policy_rate:.0f})", float((ret > config.macro().policy_rate).mean() * 100)),
+             (f"Enflasyon (%{config.macro().inflation_rate:.0f})", float((ret > config.macro().inflation_rate).mean() * 100))]
     if real is not None:
         items.append(("Pozitif reel getiri", float((real > 0).mean() * 100)))
     labels = [i[0] for i in items][::-1]
@@ -640,7 +640,7 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
         Spacer(1, 12 * mm),
         Paragraph(f"Rapor Tarihi: {today}<br/>Analiz Edilen Fon Sayısı: {n_funds}<br/>"
                   f"Risksiz Faiz Oranı (Benchmark): %{risk_free_rate:.1f}<br/>"
-                  f"Enflasyon (TÜFE): %{config.INFLATION_RATE:.0f} &nbsp;|&nbsp; Politika Faizi: %{config.POLICY_RATE:.0f}", styles["CoverInfo"]),
+                  f"Enflasyon (TÜFE): %{config.macro().inflation_rate:.0f} &nbsp;|&nbsp; Politika Faizi: %{config.macro().policy_rate:.0f}", styles["CoverInfo"]),
         Spacer(1, 8 * mm),
     ]
     if include or exclude:
@@ -684,7 +684,7 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
         (pct(avg("Yillik_Volatilite")), "Ort. volatilite"),
         (fmt(avg("Sharpe_Orani"), 2), "Ort. Sharpe"),
         (pct(med("Max_Drawdown")), "Medyan Max DD"),
-        (pf_((ret_all > config.INFLATION_RATE).mean()), "Enflasyonu geçen"),
+        (pf_((ret_all > config.macro().inflation_rate).mean()), "Enflasyonu geçen"),
         (pf_((real_all > 0).mean()) if real_all is not None else "—", "Pozitif reel getiri"),
     ]
     story += [Paragraph("GÖSTERGE PANELİ", styles["Section"]),
@@ -717,15 +717,15 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
 
     # ── Benchmark karşılaştırması (#2): UYGUN fonlar (rf'yi geçenler) üzerinden;
     #    asıl soru enflasyon/politika faizi ve reel getiri.
-    m_infl = int((elig["Yillik_Getiri"] > config.INFLATION_RATE).sum())
-    m_pol = int((elig["Yillik_Getiri"] > config.POLICY_RATE).sum())
+    m_infl = int((elig["Yillik_Getiri"] > config.macro().inflation_rate).sum())
+    m_pol = int((elig["Yillik_Getiri"] > config.macro().policy_rate).sum())
     has_real = "Reel_Getiri_1Y" in elig.columns
     m_real_pos = int((elig["Reel_Getiri_1Y"] > 0).sum()) if has_real else 0
     avg_real = elig["Reel_Getiri_1Y"].mean() if has_real else np.nan
     p = lambda k: f"{k} / {n_elig} (%{k / n_elig * 100:.0f})" if n_elig else "—"
     bench_rows = [
-        [f"Enflasyonu (%{config.INFLATION_RATE:.0f}) geçen", p(m_infl),
-         f"Politika faizini (%{config.POLICY_RATE:.0f}) geçen", p(m_pol)],
+        [f"Enflasyonu (%{config.macro().inflation_rate:.0f}) geçen", p(m_infl),
+         f"Politika faizini (%{config.macro().policy_rate:.0f}) geçen", p(m_pol)],
         ["Pozitif reel getiri", p(m_real_pos),
          "Ortalama reel getiri", pct(avg_real)],
     ]
@@ -930,7 +930,7 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
         ("Portföy Riski", "Örnek portföyün volatilitesi fonların gerçek günlük getiri kovaryansından σ = √(w'·Σ·w) ile hesaplanır. "
          "Risk katkısı RC_i = w_i·(Σw)_i / (w'·Σ·w) her fonun riske gerçek payını, sualtı eğrisi ise tarihsel drawdown'u gösterir."),
         ("Veri Kalitesi", f"Tek günde > %{config.DATA_QUALITY_MAX_DAILY_MOVE:.0f} fiyat hareketi yapan fonlar şüpheli kabul edilip analizden çıkarılır."),
-        ("Reel Getiri & Vergi", f"Reel getiri Fisher denklemiyle enflasyondan (%{config.INFLATION_RATE:.0f} TÜFE) arındırılır. "
+        ("Reel Getiri & Vergi", f"Reel getiri Fisher denklemiyle enflasyondan (%{config.macro().inflation_rate:.0f} TÜFE) arındırılır. "
          "<b>Net getiri yalnızca yönetim ücreti düşülerek</b> verilir; stopaj/işlem vergileri tutuş süresi ve fon tipine bağlı olduğundan "
          "(bu veri setinde yok) modellenmez."),
         ("Survivorship Bias", "Analiz yalnızca platformda hâlen aktif olan fonları kapsar. Kapanmış, birleşmiş veya tasfiye edilmiş "
@@ -1191,7 +1191,7 @@ def generate_comparison(met: pd.DataFrame, combined: pd.DataFrame, fund_type: st
         Paragraph(f"Rapor Tarihi: {today}<br/>"
                   f"Karşılaştırılan Fonlar: <b>{', '.join(codes)}</b><br/>"
                   f"Risksiz Faiz (Benchmark): %{risk_free_rate:.1f} &nbsp;|&nbsp; "
-                  f"Enflasyon: %{config.INFLATION_RATE:.0f}", styles["CoverInfo"]),
+                  f"Enflasyon: %{config.macro().inflation_rate:.0f}", styles["CoverInfo"]),
         Spacer(1, 10 * mm),
         Paragraph("Bu rapor kantitatif modellere dayanır ve yatırım tavsiyesi değildir. "
                   "Fonlar 'olduğu gibi' kıyaslanır; aktiflik/uygunluk filtresi uygulanmaz.", styles["Disclaimer"]),

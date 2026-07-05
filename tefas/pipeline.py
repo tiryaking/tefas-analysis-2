@@ -26,13 +26,19 @@ class Artifacts:
     report_pdf: Path
 
 
-def run(fund_type: str = "YAT", risk_free_rate: float = 45.0, *,
+def run(fund_type: str = "YAT", risk_free_rate: float | None = None, *,
         include: list[str] | None = None, exclude: list[str] | None = None,
         active_only: bool = True, keep_suspect: bool = False,
         min_aum: float | None = None, min_fund_age: float | None = None,
         write_report: bool = True) -> Artifacts:
-    """Tüm pipeline'ı bellekte çalıştırır; çıktı dosya yollarını döndürür."""
+    """Tüm pipeline'ı bellekte çalıştırır; çıktı dosya yollarını döndürür.
+
+    `risk_free_rate=None` → `tefas.config.json`'daki `risk_free_rate` (yoksa
+    `config.DEFAULT_MACRO` değeri) kullanılır.
+    """
     setup_utf8()
+    if risk_free_rate is None:
+        risk_free_rate = config.macro().risk_free_rate
     paths = config.paths_for(fund_type)
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     config.REPORTS_DIR.mkdir(parents=True, exist_ok=True)

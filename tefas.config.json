@@ -1,6 +1,9 @@
 {
   "fund_type": "YAT",
-  "risk_free_rate": 55.0,
+  "risk_free_rate": 65.0,
+  "inflation_rate": 55.0,
+  "policy_rate": 50.0,
+  "management_fee_rate": 1.0,
   "include": null,
   "exclude": [
     "ALTIN",

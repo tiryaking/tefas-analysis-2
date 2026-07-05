@@ -55,9 +55,10 @@ def test_calmar_ratio():
 
 
 def test_after_fee_return():
-    # Yalnızca yönetim ücreti (%1) düşülür; geçersiz stopaj sezgiseli kaldırıldı.
-    assert m.after_fee_return(70) == pytest.approx(69.0)
-    assert m.after_fee_return(40) == pytest.approx(39.0)
+    # Yalnızca yönetim ücreti düşülür; geçersiz stopaj sezgiseli kaldırıldı.
+    # Ücret parametresi açık verilir ki test diskteki config'e bağımlı olmasın.
+    assert m.after_fee_return(70, fee=1.0) == pytest.approx(69.0)
+    assert m.after_fee_return(40, fee=1.0) == pytest.approx(39.0)
     assert np.isnan(m.after_fee_return(np.nan))
 
 
@@ -132,7 +133,8 @@ def test_short_fund_return_annualized():
 
 
 def test_eligibility_mask_not_dropped():
-    """rf filtresi satır DÜŞÜRMEZ; Uygun maskesi olarak eklenir."""
+    """rf artık uygunluk kriteri değil: satır düşürmez, Uygun'u etkilemez;
+    yalnızca bilgilendirici `Rf_Ustu` bayrağını belirler."""
     rng = pd.date_range("2025-01-01", periods=300, freq="B")
     rows = []
     for code, drift in [("HIGH", 1.003), ("LOW", 1.0002)]:
@@ -145,4 +147,21 @@ def test_eligibility_mask_not_dropped():
     out = m.compute_metrics(combined, risk_free_rate=45.0)
     assert set(out["Fon Kodu"]) == {"HIGH", "LOW"}     # ikisi de KORUNUR
     elig = dict(zip(out["Fon Kodu"], out["Uygun"]))
-    assert elig["HIGH"] and not elig["LOW"]            # sadece yüksek getirili uygun
+    assert elig["HIGH"] and elig["LOW"]                # rf uygunluğu etkilemez
+    rf_flag = dict(zip(out["Fon Kodu"], out["Rf_Ustu"]))
+    assert rf_flag["HIGH"] and not rf_flag["LOW"]      # bayrak doğru ayrışır
+
+
+def test_aum_age_eligibility():
+    """AUM/yaş kriterleri Uygun maskesini belirlemeye devam eder."""
+    rng = pd.date_range("2025-01-01", periods=300, freq="B")
+    rows = []
+    for code, aum in [("BIG", 5e8), ("TINY", 1e6)]:
+        price = 100.0
+        for d in rng:
+            price *= 1.002
+            rows.append({"Fon Kodu": code, "Fon Adi": f"{code} FON",
+                         "Tarih": d, "Fiyat": price, "Fon Toplam Deger": aum})
+    out = m.compute_metrics(pd.DataFrame(rows), risk_free_rate=45.0, min_aum=50.0)
+    elig = dict(zip(out["Fon Kodu"], out["Uygun"]))
+    assert elig["BIG"] and not elig["TINY"]

@@ -8,6 +8,7 @@ hızlı); insan-dostu özetler ayrıca CSV olarak da yazılır.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,6 +45,15 @@ TRADING_DAYS_PER_YEAR = 252
 # kullanır ve tablolarda `*` ile işaretlenir.
 SCORING_LOOKBACK_DAYS = 252
 
+# Kısa geçmişli fonların yıllıklandırılmış getirisi gürültülüdür; skorlamada
+# getiri, `Skor_Penceresi_Gun / RETURN_FULL_CREDIBILITY_DAYS` güvenilirlik
+# ağırlığıyla akran (tema) medyanına doğru çekilir (bkz. scoring.shrunk_annual_return).
+RETURN_FULL_CREDIBILITY_DAYS = 189   # ~%75 × 252: tam güvenilirlik eşiği
+
+# Tema-içi akran kıyası (medyan/yüzdelik) için temada bulunması gereken
+# asgari fon sayısı; altındaki temalar akran istatistiği üretmez.
+THEME_MIN_FUNDS = 5
+
 # ─── Veri kalitesi ────────────────────────────────────────────────────────────
 DATA_QUALITY_MAX_DAILY_MOVE = 35.0   # tek-günlük mutlak hareket sınırı (%)
 DAILY_RETURN_CLIP = 25.0             # volatilite/Sortino için winsorize bandı (%)
@@ -54,11 +64,71 @@ DAILY_RETURN_CLIP = 25.0             # volatilite/Sortino için winsorize bandı
 # hem de bir *orana* vergi uygulayarak boyutsal olarak hatalıydı; kaldırıldı.
 # `Net_Getiri_1Y` artık yalnızca yönetim ücreti düşülmüş getiridir; işlem
 # vergileri modellenmez (reel getiri için `Reel_Getiri_1Y` kullanılır).
-MANAGEMENT_FEE_RATE = 1.0
-TUFE_RATE = 55.0
-INFLATION_RATE = 55.0
-POLICY_RATE = 50.0
+#
+# Makro oranlar artık modül sabiti DEĞİL: `tefas.config.json`'daki düz
+# anahtarlardan okunur (`macro()`); dosya/anahtar yoksa DEFAULT_MACRO devreye
+# girer ve hangi anahtarların varsayılan kaldığı `defaults_used`'da izlenir
+# (raporda "(varsayılan)" işareti için).
 REAL_RETURN_ENABLED = True
+
+DEFAULT_MACRO = {
+    "risk_free_rate": 45.0,
+    "inflation_rate": 55.0,
+    "policy_rate": 50.0,
+    "management_fee_rate": 1.0,
+}
+
+
+@dataclass(frozen=True)
+class MacroRates:
+    """Çalıştırma-zamanı makro oranları (yüzde) + varsayılana düşen anahtarlar."""
+    risk_free_rate: float
+    inflation_rate: float
+    policy_rate: float
+    management_fee_rate: float
+    defaults_used: frozenset
+
+
+def load_macro(path: Path | None = None) -> MacroRates:
+    """`tefas.config.json`'dan makro oranları oku; asla exception fırlatmaz.
+
+    Eksik dosya / bozuk JSON / eksik veya sayı-olmayan anahtar → DEFAULT_MACRO
+    değeri kullanılır ve anahtar `defaults_used`'a eklenir.
+    """
+    p = Path(path) if path is not None else DEFAULT_CONFIG_PATH
+    raw = {}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raw = {}
+    except Exception:  # noqa: BLE001 — pipeline config yüzünden asla çökmesin
+        raw = {}
+    values, defaulted = {}, set()
+    for key, fallback in DEFAULT_MACRO.items():
+        v = raw.get(key)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            values[key] = float(v)
+        else:
+            values[key] = fallback
+            defaulted.add(key)
+    return MacroRates(defaults_used=frozenset(defaulted), **values)
+
+
+_MACRO: MacroRates | None = None
+
+
+def macro() -> MacroRates:
+    """Varsayılan config dosyasından okunan, önbelleklenmiş makro oranlar."""
+    global _MACRO
+    if _MACRO is None:
+        _MACRO = load_macro()
+    return _MACRO
+
+
+def reset_macro_cache() -> None:
+    """Test izolasyonu için önbelleği sıfırlar."""
+    global _MACRO
+    _MACRO = None
 
 # ─── AUM / yaş ────────────────────────────────────────────────────────────────
 AUM_BONUS_THRESHOLD = 50
