@@ -492,6 +492,249 @@ def _chart_category_mix(df, path, n=10):
     return _chart(fig, path)
 
 
+def _chart_monthly_heatmap(combined, codes, path, median_row=True):
+    """Aylık getiri takvimi: fonlar × aylar ısı haritası (+ evren medyan satırı).
+
+    Iraksak (diverging) palet, 0 merkezli; NaN hücreler (fon o ay yoktu) açık gri.
+    """
+    if combined is None or not codes:
+        return None
+    import matplotlib.colors as mcolors
+    piv = combined.pivot_table(index="Tarih", columns="Fon Kodu", values="Fiyat", aggfunc="last").sort_index()
+    piv.index = pd.to_datetime(piv.index)
+    avail = [c for c in codes if c in piv.columns]
+    if not avail:
+        return None
+    month_last = piv.groupby(piv.index.to_period("M")).last()
+    monthly = month_last.pct_change().iloc[1:] * 100.0
+    if monthly.empty or len(monthly) < 2:
+        return None
+    data = monthly[avail].T
+    row_labels = list(avail)
+    if median_row:
+        med = monthly.median(axis=1)          # tüm evrenin ay medyanı
+        data = pd.concat([data, med.to_frame("Evren medyanı").T])
+        row_labels.append("Evren medyanı")
+    vals = data.to_numpy(dtype=float)
+    if not np.isfinite(vals).any():
+        return None
+    # TwoSlopeNorm vmin < 0 < vmax ister; tüm aylar pozitifken (yüksek enflasyon
+    # ortamında olağan) çökmemesi için uçlar 0'ın iki yanına zorlanır.
+    vmin = min(np.nanmin(vals), -0.1)
+    vmax = max(np.nanmax(vals), 0.1)
+    norm = mcolors.TwoSlopeNorm(vmin=vmin, vcenter=0.0, vmax=vmax)
+    cmap = plt.get_cmap("RdYlGn").with_extremes(bad="#e8ebef")
+    masked = np.ma.masked_invalid(vals)
+    fig, ax = plt.subplots(figsize=(9.8, 0.42 * len(row_labels) + 1.15))
+    ax.imshow(masked, cmap=cmap, norm=norm, aspect="auto")
+    ax.set_xticks(np.arange(len(monthly.index)))
+    ax.set_xticklabels([str(p) for p in monthly.index], rotation=90, fontsize=6.5)
+    ax.set_yticks(np.arange(len(row_labels)))
+    ax.set_yticklabels(row_labels, fontsize=7.5)
+    if median_row:
+        ax.get_yticklabels()[-1].set_fontweight("bold")
+    for i in range(vals.shape[0]):
+        for j in range(vals.shape[1]):
+            v = vals[i, j]
+            if not np.isfinite(v):
+                continue
+            r, g, b, _ = cmap(norm(v))
+            lum = 0.299 * r + 0.587 * g + 0.114 * b
+            ax.text(j, i, f"{v:.1f}", ha="center", va="center", fontsize=6,
+                    color="white" if lum < 0.45 else "#1f2733")
+    ax.set_title("Aylık Getiri Takvimi (%)", fontsize=11, color=MPL_NAVY, fontweight="bold", pad=10)
+    ax.tick_params(length=0)
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+    fig.tight_layout()
+    return _chart(fig, path)
+
+
+def _chart_rolling(combined, codes, path, rf=None, color_map=None, window=63):
+    """Yuvarlanan pencere metrikleri: 63 günlük yıllıklandırılmış getiri (üst)
+    ve yıllıklandırılmış volatilite (alt). Fon renkleri color_map ile tutarlı."""
+    if combined is None or not codes:
+        return None
+    piv = combined.pivot_table(index="Tarih", columns="Fon Kodu", values="Fiyat", aggfunc="last").sort_index()
+    piv.index = pd.to_datetime(piv.index)
+    avail = [c for c in codes if c in piv.columns]
+    if not avail:
+        return None
+    px = piv[avail]
+    logret = np.log(px).diff()
+    if logret.dropna(how="all").shape[0] < window + 5:
+        return None
+    td = config.TRADING_DAYS_PER_YEAR
+    roll_ret = (np.exp(logret.rolling(window).sum() * (td / window)) - 1.0) * 100.0
+    roll_vol = px.pct_change().rolling(window).std() * np.sqrt(td) * 100.0
+    fig, (a1, a2) = plt.subplots(2, 1, figsize=(9.6, 5.0), sharex=True, height_ratios=[1.25, 1])
+    for i, c in enumerate(avail):
+        color = (color_map or {}).get(c, FUND_PALETTE[i % len(FUND_PALETTE)])
+        a1.plot(roll_ret.index, roll_ret[c], label=c, linewidth=1.4, color=color)
+        a2.plot(roll_vol.index, roll_vol[c], linewidth=1.4, color=color)
+    if rf is not None and rf > 0:
+        a1.axhline(rf, color=MPL_GREY, linestyle="--", linewidth=1.1, label=f"rf %{rf:.0f}")
+    a1.set_ylabel(f"{window}g getiri (yıllık, %)", fontsize=8, color=MPL_NAVY)
+    a1.set_title(f"Yuvarlanan {window} Günlük Getiri ve Volatilite (yıllıklandırılmış)",
+                 fontsize=11, color=MPL_NAVY, fontweight="bold")
+    a1.legend(fontsize=7.5, ncol=min(len(avail) + 1, 6), framealpha=0.9, loc="upper left")
+    a2.set_ylabel(f"{window}g volatilite (%)", fontsize=8, color=MPL_NAVY)
+    import matplotlib.dates as mdates
+    a2.xaxis.set_major_locator(mdates.AutoDateLocator())
+    a2.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    for ax in (a1, a2):
+        ax.grid(True, alpha=0.2, linestyle="--")
+        ax.tick_params(labelsize=7.5)
+        for sp in ax.spines.values():
+            sp.set_color("#d4dbe6")
+    fig.tight_layout()
+    return _chart(fig, path)
+
+
+def _chart_fund_detail(combined, code, path, color=None, benchmark=None,
+                       benchmark_label="Tema medyanı"):
+    """Tek fonun büyük detay grafiği: büyüme + akran medyanı (üst), sualtı (alt)."""
+    if combined is None:
+        return None
+    sub = combined[combined["Fon Kodu"] == code].sort_values("Tarih")
+    if len(sub) < 10:
+        return None
+    p = pd.to_numeric(sub["Fiyat"], errors="coerce")
+    t = pd.to_datetime(sub["Tarih"])
+    mask = p.notna() & (p > 0)
+    p, t = p[mask].to_numpy(), t[mask].reset_index(drop=True)
+    if len(p) < 10:
+        return None
+    norm_ = p / p[0] * 100.0
+    peak = np.maximum.accumulate(norm_)
+    dd = (peak - norm_) / peak * 100.0
+    fig, (a1, a2) = plt.subplots(2, 1, figsize=(6.4, 3.4), height_ratios=[2.2, 1], sharex=True)
+    a1.plot(t, norm_, color=color or MPL_NAVY, linewidth=1.6, label=code)
+    if benchmark is not None and len(benchmark) >= 2:
+        b = benchmark.copy()
+        b.index = pd.to_datetime(b.index)
+        b = b[(b.index >= t.min()) & (b.index <= t.max())]
+        if len(b) >= 2:
+            b = b / b.iloc[0] * 100.0
+            a1.plot(b.index, b.values, color=MPL_GREY, linestyle="--", linewidth=1.2,
+                    label=benchmark_label, zorder=1)
+    a1.axhline(100, color=MPL_GREY, linewidth=0.6, linestyle=":")
+    a1.set_ylabel("Değer (100 taban)", fontsize=8, color=MPL_NAVY)
+    a1.legend(fontsize=7.5, framealpha=0.9, loc="upper left")
+    a2.fill_between(t, 0, dd, color="#c0392b", alpha=0.35, linewidth=0)
+    a2.plot(t, dd, color="#c0392b", linewidth=0.8)
+    a2.invert_yaxis()
+    a2.set_ylabel("DD (%)", fontsize=8, color=MPL_NAVY)
+    import matplotlib.dates as mdates
+    a2.xaxis.set_major_locator(mdates.AutoDateLocator())
+    a2.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    for ax in (a1, a2):
+        ax.grid(True, alpha=0.2, linestyle="--")
+        ax.tick_params(labelsize=7)
+        for sp in ax.spines.values():
+            sp.set_color("#d4dbe6")
+    fig.tight_layout()
+    return _chart(fig, path)
+
+
+def _chart_monthly_bars(combined, code, path):
+    """Tek fonun aylık getirileri: pozitif yeşil, negatif kırmızı bar."""
+    if combined is None:
+        return None
+    sub = combined[combined["Fon Kodu"] == code].sort_values("Tarih")
+    if len(sub) < 25:
+        return None
+    p = pd.to_numeric(sub["Fiyat"], errors="coerce")
+    t = pd.to_datetime(sub["Tarih"])
+    s = pd.Series(p.to_numpy(), index=t)
+    month_last = s.groupby(s.index.to_period("M")).last()
+    monthly = month_last.pct_change().dropna() * 100.0
+    if len(monthly) < 2:
+        return None
+    colors_ = [MPL_GREEN if v >= 0 else "#c0392b" for v in monthly]
+    fig, ax = plt.subplots(figsize=(4.0, 3.4))
+    bars = ax.bar(np.arange(len(monthly)), monthly.to_numpy(), color=colors_, alpha=0.9)
+    ax.bar_label(bars, labels=[f"{v:.1f}" for v in monthly], fontsize=5.5, padding=1.5, color=MPL_NAVY)
+    ax.axhline(0, color=MPL_GREY, linewidth=0.7)
+    ax.set_xticks(np.arange(len(monthly)))
+    ax.set_xticklabels([str(pp) for pp in monthly.index], rotation=90, fontsize=6)
+    ax.set_ylabel("Aylık getiri (%)", fontsize=8, color=MPL_NAVY)
+    ax.set_title("Aylık Getiriler", fontsize=10, color=MPL_NAVY, fontweight="bold")
+    ax.grid(True, axis="y", alpha=0.2, linestyle="--")
+    ax.margins(y=0.15)
+    ax.tick_params(labelsize=7)
+    for sp in ax.spines.values():
+        sp.set_color("#d4dbe6")
+    fig.tight_layout()
+    return _chart(fig, path)
+
+
+def _fund_detail_flowables(row, combined, scored_df, theme_meds, styles, chart_dir, rf, color):
+    """Tek fon için tam sayfa detay: büyük grafik, aylık barlar, akran kıyas tablosu."""
+    code = str(row["Fon Kodu"])
+    theme = row.get("Tema") if pd.notna(row.get("Tema")) else fund_theme(row.get("Fon Adi"))
+
+    # Akran patikası: yeterli fon varsa tema medyanı, yoksa evren medyanı.
+    bench, blabel = None, "Evren medyanı"
+    if scored_df is not None and "Tema" in scored_df.columns:
+        peers = scored_df.loc[scored_df["Tema"] == theme, "Fon Kodu"].astype(str).tolist()
+        if len(peers) >= config.THEME_MIN_FUNDS:
+            bench = themes.theme_median_growth(combined, codes=peers)
+            blabel = f"Tema medyanı ({len(peers)} fon)"
+    if bench is None:
+        bench = themes.theme_median_growth(combined)
+        blabel = "Evren medyanı"
+
+    big = _chart_fund_detail(combined, code, chart_dir / f"detail_{code}.png", color, bench, blabel)
+    bars = _chart_monthly_bars(combined, code, chart_dir / f"mbars_{code}.png")
+
+    rf_flag = "✓ rf üzeri" if bool(row.get("Rf_Ustu")) else f"— rf (%{rf:.0f}) altı"
+    thin = pd.notna(row.get("Veri_Noktasi_Sayisi")) and row.get("Veri_Noktasi_Sayisi") < config.TRADING_DAYS_PER_YEAR
+    thin_note = " &nbsp;|&nbsp; * 1 yıldan kısa geçmiş" if thin else ""
+    flow = [Paragraph(f"FON DETAYI — {_code_label(row)}", styles["Section"]),
+            Paragraph(f"{short_name(row.get('Fon Adi'), 95)} &nbsp;|&nbsp; Tema: {theme} &nbsp;|&nbsp; "
+                      f"{rf_flag}{thin_note}", styles["Body"]), Spacer(1, 2 * mm)]
+
+    imgs = []
+    if big:
+        imgs.append(Image(big, width=155 * mm, height=82 * mm))
+    if bars:
+        imgs.append(Image(bars, width=95 * mm, height=81 * mm))
+    if imgs:
+        img_tbl = Table([imgs], colWidths=[158 * mm, 98 * mm][: len(imgs)])
+        img_tbl.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                     ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                                     ("RIGHTPADDING", (0, 0), (-1, -1), 2)]))
+        flow += [img_tbl, Spacer(1, 3 * mm)]
+
+    # Akran kıyas tablosu: fon vs. tema medyanı vs. evren medyanı
+    metric_rows = [("Yıllık Getiri", "Yillik_Getiri", lambda v: pct(v)),
+                   ("Volatilite", "Yillik_Volatilite", lambda v: pct(v)),
+                   ("Sharpe", "Sharpe_Orani", lambda v: fmt(v, 2)),
+                   ("Sortino", "Sortino_Orani", lambda v: fmt(v, 2)),
+                   ("Max Drawdown", "Max_Drawdown", lambda v: pct(v)),
+                   ("VaR %95 (gün)", "VaR_95", lambda v: pct(v)),
+                   ("Reel Getiri", "Reel_Getiri_1Y", lambda v: pct(v)),
+                   ("AUM (mn TL)", "Fon_Toplam_Deger_Milyon_TL", lambda v: fmt(v, 0))]
+    tmed = theme_meds.loc[theme] if (theme_meds is not None and theme in theme_meds.index) else None
+    headers = ["Metrik", "Fon", "Tema Medyanı", "Evren Medyanı"]
+    cw = [42 * mm, 30 * mm, 32 * mm, 32 * mm]
+    trows = []
+    for label, colname, f in metric_rows:
+        tval = f(tmed.get(colname)) if tmed is not None and colname in tmed.index else "—"
+        uval = f(pd.to_numeric(scored_df[colname], errors="coerce").median()) \
+            if (scored_df is not None and colname in scored_df.columns) else "—"
+        trows.append([Paragraph(label, styles["CellB"]), Paragraph(f(row.get(colname)), styles["Cell"]),
+                      Paragraph(tval, styles["Cell"]), Paragraph(uval, styles["Cell"])])
+    n_peers = int(tmed["Fon_Sayisi"]) if (tmed is not None and "Fon_Sayisi" in tmed.index) else 0
+    rel = row.get("Tema_Rel_Skor")
+    rel_txt = (f"Tema içi getiri yüzdeliği: <b>{fmt(rel, 0)} / 100</b> ({n_peers} fon)"
+               if pd.notna(rel) else f"Tema içi yüzdelik: — (temada {config.THEME_MIN_FUNDS} fondan az)")
+    flow += [_make_table(headers, trows, cw, styles, align_right_from=1),
+             Spacer(1, 2 * mm), Paragraph(rel_txt, styles["BodySm"]), PageBreak()]
+    return flow
+
+
 def _build_portfolio(df):
     plan = [("Conservative", "Muhafazakâr", 2, 22.0), ("Balanced", "Dengeli", 2, 16.0),
             ("Moderate", "Orta", 1, 14.0), ("Aggressive", "Agresif", 1, 10.0)]
@@ -567,9 +810,9 @@ def _fund_card(row, spark_img, styles, rf):
         kv("VaR %95", pct(row.get("VaR_95"))) + kv("CVaR %95", pct(row.get("CVaR_95"))),
         kv("Reel Get.", pct(row.get("Reel_Getiri_1Y"))) + kv("Kuruluş CAGR", pct(row.get("Yillik_Getiri_Kurulus"))),
         kv("AUM (mn TL)", fmt(row.get("Fon_Toplam_Deger_Milyon_TL"), 0)) + kv("Yaş (yıl)", fmt(row.get("Fon_Yasi_Yil"), 1)),
-        kv("rf üzeri", "✓" if bool(row.get("Rf_Ustu")) else "—") +
-        kv("Tema yüzdelik", fmt(row.get("Tema_Rel_Skor"), 0)),
     ]
+    # rf bayrağı ve tema yüzdeliği kartta değil, fonun DETAY sayfasında gösterilir
+    # (kart 6 satırda kalır ki 6 künye tek sayfaya sığsın).
     gtbl = Table(grid, colWidths=[18 * mm, 18 * mm, 18 * mm, 18 * mm])
     gtbl.setStyle(TableStyle([
         ("TOPPADDING", (0, 0), (-1, -1), 1.2), ("BOTTOMPADDING", (0, 0), (-1, -1), 1.2),
@@ -783,6 +1026,27 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
                   Image(growth_chart, width=236 * mm, height=110 * mm)]
     story.append(PageBreak())
 
+    # 4b. Aylık getiri takvimi (ısı haritası)
+    hm = _chart_monthly_heatmap(combined, top10_codes, chart_dir / "monthly_hm.png")
+    if hm:
+        n_hm_rows = len(top10_codes) + 1
+        hm_h = min((0.42 * n_hm_rows + 1.15) / 9.8 * 236, 150)
+        story += [Paragraph("AYLIK GETİRİ TAKVİMİ — İLK 10", styles["Section"]),
+                  Paragraph("Composite skora göre ilk 10 uygun fonun ay-ay getirisi ve tüm evrenin ay medyanı (son satır). "
+                            "Yeşil pozitif, kırmızı negatif ayları gösterir; gri hücrelerde fonun o ay verisi yoktur. "
+                            "Tutarlı fonlar satır boyunca kesintisiz yeşil ton bırakır.", styles["BodySm"]),
+                  Image(hm, width=236 * mm, height=hm_h * mm), PageBreak()]
+
+    # 4c. Yuvarlanan getiri & volatilite
+    roll = _chart_rolling(combined, top_overall["Fon Kodu"].tolist(), chart_dir / "rolling.png",
+                          rf=risk_free_rate, color_map=color_map)
+    if roll:
+        story += [Paragraph("YUVARLANAN 63 GÜNLÜK GETİRİ & VOLATİLİTE — İLK 5", styles["Section"]),
+                  Paragraph("Üst panel: 63 işlem günlük pencereden yıllıklandırılmış getiri — kesikli gri çizgi risksiz faiz. "
+                            "Alt panel: aynı pencerede yıllıklandırılmış volatilite. Performansın döneme mi yayıldığını yoksa "
+                            "tek bir sıçramadan mı geldiğini ve risk rejimindeki değişimleri gösterir.", styles["BodySm"]),
+                  Image(roll, width=226 * mm, height=118 * mm), PageBreak()]
+
     # 5. Fon künyeleri (tear-sheet)
     card_rows_src = elig.nlargest(6, "Overall_Score")
     cards_out = []
@@ -802,6 +1066,14 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
                                          ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
             story.append(row_tbl)
         story.append(PageBreak())
+
+    # 5b. Fon detay sayfaları — ilk 6 öneri, her fon tam sayfa
+    detail_cols = ["Yillik_Getiri", "Yillik_Volatilite", "Sharpe_Orani", "Sortino_Orani",
+                   "Max_Drawdown", "VaR_95", "Reel_Getiri_1Y", "Fon_Toplam_Deger_Milyon_TL"]
+    theme_meds = themes.theme_medians(df, detail_cols) if "Tema" in df.columns else None
+    for _, r in card_rows_src.iterrows():
+        story += _fund_detail_flowables(r, combined, df, theme_meds, styles, chart_dir,
+                                        risk_free_rate, color_map.get(str(r["Fon Kodu"])))
 
     # 6. Risk profilleri
     story.append(Paragraph("RİSK PROFİLİNE GÖRE ÖNERİLER", styles["Section"]))
