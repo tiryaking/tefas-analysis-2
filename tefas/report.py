@@ -1094,8 +1094,8 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
                   Paragraph(fund_theme(r["Fon Adi"]), styles["Cell"]), Paragraph(fmt(r.get(col), 1), styles["Cell"]),
                   Paragraph(pct(r.get("Yillik_Getiri")), styles["Cell"]), Paragraph(pct(r.get("Yillik_Volatilite")), styles["Cell"]),
                   Paragraph(fmt(r.get("Sharpe_Orani"), 2), styles["Cell"]), Paragraph(pct(r.get("Max_Drawdown")), styles["Cell"])]
-                 for _, r in elig.nlargest(7, col).iterrows()]
-        block += [_make_table(prof_headers, prows, prof_cw, styles, align_right_from=3), Spacer(1, 4 * mm)]
+                 for _, r in elig.nlargest(6, col).iterrows()]
+        block += [_make_table(prof_headers, prows, prof_cw, styles, align_right_from=3), Spacer(1, 3 * mm)]
         story.append(KeepTogether(block))
     story.append(PageBreak())
 

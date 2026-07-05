@@ -1,0 +1,14 @@
+{
+  "fund_type": "YAT",
+  "risk_free_rate": 45.0,
+  "inflation_rate": 55.0,
+  "policy_rate": 50.0,
+  "management_fee_rate": 1.0,
+  "include": null,
+  "exclude": ["ALTIN", "GÜMÜŞ"],
+  "active_only": true,
+  "keep_suspect": false,
+  "min_aum": null,
+  "min_fund_age": null,
+  "write_report": true
+}

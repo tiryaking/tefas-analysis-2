@@ -84,7 +84,10 @@ tefas run --config baska.json --fund-type EMK   # CLI config'i ezer
 
 Config JSON veya TOML olabilir; desteklenen anahtarlar: `fund_type`,
 `risk_free_rate`, `include`, `exclude`, `active_only`, `keep_suspect`,
-`min_aum`, `min_fund_age`, `write_report`. Örnek:
+`min_aum`, `min_fund_age`, `write_report` ve **makro oranlar**:
+`inflation_rate`, `policy_rate`, `management_fee_rate`. Makro oranlar artık
+kodda sabit değildir; `tefas.config.json`'dan okunur, eksikse koddaki
+varsayılana düşülür ve raporun kapağında "(varsayılan)" olarak işaretlenir. Örnek:
 [`tefas.config.example.json`](tefas.config.example.json). **Öncelik:** CLI
 argümanı > config dosyası > yerleşik varsayılan.
 
@@ -153,11 +156,12 @@ tefas/
   etl.py           load_combined() -> DataFrame  (dosyaya yazmaz)
   data_quality.py  Saf fonksiyonlar: bozuk seri tespiti, winsorize
   metrics.py       Saf metrik fonksiyonları + compute_metrics()
-  scoring.py       Percentile-rank composite skor, risk profilleri
+  themes.py        Tema sınıflandırması + akran (tema medyanı) istatistikleri
+  scoring.py       Percentile-rank composite skor, shrinkage, risk profilleri
   report.py        generate(scored_df, metrics_df, ...) -> PDF
   pipeline.py      run(): aşamaları BELLEKTE bağlar, parquet önbellek
   cli.py           Tek `tefas` komutu, alt-komutlar
-tests/             34 altın-değer + entegrasyon testi
+tests/             56 altın-değer + entegrasyon/smoke testi
 ```
 
 ## v1 incelemesinden uygulanan bulgular
@@ -224,20 +228,36 @@ Formüller [tests/](tests/) ile altın-değerlere karşı doğrulanır:
 - **CAGR** gerçek uç fiyatlardan; **Volatilite/Sortino** winsorize (±%25) günlük
   getirilerle; **Sharpe** = (Getiri − Rf)/Vol; **Calmar** = (Getiri − Rf)/MaxDD.
 - **Composite skor** = yüzdelik-sıra ağırlıklı (Sharpe %25, Sortino %15, düşük
-  drawdown %20, yıllık getiri %25, tutarlılık %7,5, likidite %7,5) — outlier'a
-  dayanıklı. Tutarlılık pozitif gün/ay oranına dayanır; drawdown/Sortino'yu
+  drawdown %20, yıllık getiri %20, **tema-içi getiri %5**, tutarlılık %7,5,
+  likidite %7,5) — outlier'a dayanıklı; getiri etkisi toplamda %25 (%20 mutlak +
+  %5 akran-göreli). Tutarlılık pozitif gün/ay oranına dayanır; drawdown/Sortino'yu
   tekrar kullanmaz (çifte sayım yok).
+- **Kısa geçmiş düzeltmesi (shrinkage):** skorlamadaki getiri, güvenilirlik
+  ağırlığı `w = pencere_günü / 189` (en çok 1) ile akran (tema ≥ 5 fon, yoksa
+  evren) medyanına çekilir (`Yillik_Getiri_Duzeltilmis`). 189+ gün geçmişte
+  düzeltme sıfırdır; tablolarda gösterilen getiriler ham kalır.
+- **Akran (tema) kıyası:** harici endeks yoktur; benchmark veri-seti içidir.
+  `Tema_Rel_Skor` fonun kendi temasındaki getiri yüzdeliğidir (tema < 5 fon ise
+  NaN); büyüme grafiklerinde evren/tema medyan patikası kesikli gri çizgidir.
 - **Sıralama vs. seçim:** skorlar tüm (veri-kalitesi geçerli) evren üzerinden;
-  rf/AUM/yaş bir **uygunluk** filtresidir (satır düşürmez). Öneriler yalnızca
-  uygun fonlardan gelir.
+  AUM/yaş bir **uygunluk** filtresidir (satır düşürmez). **rf artık eleme
+  kriteri değildir** — `Rf_Ustu` bilgilendirici bayrağı ve tablolardaki `rf+`
+  sütunu olarak raporlanır. Öneriler yalnızca uygun fonlardan gelir.
 - **Veri kalitesi:** tek günde > %35 hareket eden fonlar elenir.
+
+> **Not (v2.1):** Composite ağırlıklar yeniden dengelendi (getiri %25 → %20 + %5
+> tema-içi; shrinkage eklendi) — sıralamalar v2.0'a göre kayabilir. Kayma
+> beklenen yerler: kısa geçmişli fonlar (medyana çekilir) ve tema-içi geride
+> kalanlar; uzun geçmişli güçlü fonlar en fazla 1-2 sıra oynar.
 
 ### Metodoloji düzeltmeleri (v1 → v2 paritesini bilinçli kırar)
 
 1. **Ortak pencere:** risk metrikleri artık her fonun *tüm geçmişi* yerine ortak
    gerilemeli 1 yılda hesaplanır (elma-armut sıralaması giderildi).
 2. **Sıralama/seçim ayrımı:** rf filtresi artık sıralamadan önce evreni budamaz;
-   uygunluk maskesi olarak uygulanır.
+   v2.1'den itibaren uygunluk kriteri de değildir — yalnızca bilgilendirici
+   `Rf_Ustu` bayrağıdır (yüksek rf değerlerinde evrenin çökmesini önler:
+   rf=%65'te 766 fondan yalnızca 66'sı rf üzeri getiri sağlıyordu).
 3. **Geçersiz stopaj kaldırıldı:** `net_return`'ün "enflasyon+5 üstüne %15" vergi
    sezgiseli (yıllıklandırılmış orana vergi — boyutsal hata) kaldırıldı;
    `Net_Getiri_1Y` yalnızca yönetim ücreti düşülmüş getiridir.
@@ -250,6 +270,21 @@ Gösterge paneli (KPI kartları + dağılım histogramları + benchmark barları
 fon künye kartları (tear-sheet: metrik ızgarası + büyüme/drawdown sparkline),
 portföy **risk katkısı** (kovaryanstan) ve **sualtı/drawdown** grafiği, tail-risk
 (VaR/CVaR) tablosu ve kategori/tema kırılımı eklendi.
+
+v2.1 eklemeleri:
+
+- **Aylık getiri takvimi:** ilk 10 fonun ay-ay getiri ısı haritası + evren
+  medyan satırı (0 merkezli ıraksak palet; fonun olmadığı aylar gri).
+- **Yuvarlanan 63 günlük getiri & volatilite:** performansın döneme yayılıp
+  yayılmadığını ve risk rejimi değişimlerini gösterir (rf referans çizgisiyle).
+- **Fon detay sayfaları:** ilk 6 öneri için tam sayfa — büyüme + tema medyanı
+  kıyası, sualtı eğrisi, aylık getiri barları ve `Fon | Tema Medyanı | Evren
+  Medyanı` akran tablosu + tema-içi yüzdelik.
+- **Tutarlı fon renkleri:** bir fon tüm grafiklerde aynı rengi taşır; palet
+  renk-körlüğü/kontrast kontrollerinden geçirildi.
+- **ORTA (Moderate) profili** risk-profili bölümüne eklendi (portföy kurulumu
+  zaten kullanıyordu); büyüme grafiğine **evren medyanı** benchmark çizgisi
+  eklendi; kapaktaki makro oranlar config'ten gelir.
 
 **Uyarı:** Bu araç yatırım tavsiyesi vermez. Geçmiş performans gelecek getiriyi
 garanti etmez.
