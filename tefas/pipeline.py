@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import config, etl, metrics, scoring, report
+from . import config, etl, metrics, scoring, report, themes
 from .io_utils import setup_utf8
 
 
@@ -94,6 +94,11 @@ def run_comparison(fund_type: str, risk_free_rate: float, codes: list[str]) -> i
     if len(found) < 2:
         raise SystemExit(f"[HATA] Karşılaştırılabilir en az 2 fon bulunamadı (bulunan: {found or 'yok'}).")
 
+    # Evren medyan patikası (baz=100): karşılaştırma grafiklerinde benchmark
+    # çizgisi. Alt kümeye inmeden TÜM evrenden hesaplanır (yalnızca fiyat
+    # pivotu — metrik hesabı gerektirmez, ucuzdur).
+    universe_growth = themes.theme_median_growth(combined)
+
     subset = combined[combined["Fon Kodu"].astype(str).isin(found)].copy()
     met = metrics.compute_metrics(subset, risk_free_rate, keep_suspect=True)
 
@@ -111,7 +116,8 @@ def run_comparison(fund_type: str, risk_free_rate: float, codes: list[str]) -> i
     met = met.sort_values("_order").drop(columns="_order").reset_index(drop=True)
 
     out = report.generate_comparison(met, subset, fund_type, risk_free_rate,
-                                     met["Fon Kodu"].tolist())
+                                     met["Fon Kodu"].tolist(),
+                                     universe_growth=universe_growth)
     print(f"\n[DONE] Karşılaştırma raporu: {out}")
     return 0
 

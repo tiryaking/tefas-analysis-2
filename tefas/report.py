@@ -494,9 +494,11 @@ def _chart_category_mix(df, path, n=10):
     return _chart(fig, path)
 
 
-def _chart_monthly_heatmap(combined, codes, path, median_row=True):
-    """Aylık getiri takvimi: fonlar × aylar ısı haritası (+ evren medyan satırı).
+def _chart_monthly_heatmap(combined, codes, path, median_row=True, median_label="Evren medyanı"):
+    """Aylık getiri takvimi: fonlar × aylar ısı haritası (+ medyan satırı).
 
+    Medyan satırı, verilen `combined` içindeki TÜM fonların ay medyanıdır —
+    ana raporda evren, karşılaştırmada grup medyanı (etiket `median_label`).
     Iraksak (diverging) palet, 0 merkezli; NaN hücreler (fon o ay yoktu) açık gri.
     """
     if combined is None or not codes:
@@ -514,9 +516,9 @@ def _chart_monthly_heatmap(combined, codes, path, median_row=True):
     data = monthly[avail].T
     row_labels = list(avail)
     if median_row:
-        med = monthly.median(axis=1)          # tüm evrenin ay medyanı
-        data = pd.concat([data, med.to_frame("Evren medyanı").T])
-        row_labels.append("Evren medyanı")
+        med = monthly.median(axis=1)          # çerçevedeki tüm fonların ay medyanı
+        data = pd.concat([data, med.to_frame(median_label).T])
+        row_labels.append(median_label)
     vals = data.to_numpy(dtype=float)
     if not np.isfinite(vals).any():
         return None
@@ -576,6 +578,18 @@ def _chart_rolling(combined, codes, path, rf=None, color_map=None, window=63):
         a2.plot(roll_vol.index, roll_vol[c], linewidth=1.4, color=color)
     if rf is not None and rf > 0:
         a1.axhline(rf, color=MPL_GREY, linestyle="--", linewidth=1.1, label=f"rf %{rf:.0f}")
+    # Aşırı oynak bir fonun kısa-pencere yıllıklandırması (ör. %15.000) ekseni
+    # ezip diğer fonları düz çizgiye çevirmesin: getiri ekseni makul banda kırpılır.
+    finite = roll_ret.to_numpy(dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size:
+        hi_cap = max(300.0, (rf or 0.0) * 3.0)
+        lo_cap = -100.0
+        hi, lo = float(finite.max()), float(finite.min())
+        if hi > hi_cap or lo < lo_cap:
+            a1.set_ylim(max(lo, lo_cap) - 10, min(hi, hi_cap))
+            a1.text(0.995, 0.96, "getiri ekseni kırpıldı", transform=a1.transAxes,
+                    ha="right", va="top", fontsize=6.5, color=MPL_GREY)
     a1.set_ylabel(f"{window}g getiri (yıllık, %)", fontsize=8, color=MPL_NAVY)
     a1.set_title(f"Yuvarlanan {window} Günlük Getiri ve Volatilite (yıllıklandırılmış)",
                  fontsize=11, color=MPL_NAVY, fontweight="bold")
@@ -1280,8 +1294,9 @@ def _cmp_pivot(combined, codes):
     return pivot[avail], avail
 
 
-def _chart_cmp_growth(combined, codes, path):
-    """Karşılaştırılan fonların ortak dönemde normalize (100 taban) büyümesi."""
+def _chart_cmp_growth(combined, codes, path, benchmark=None, benchmark_label="Evren medyanı"):
+    """Karşılaştırılan fonların ortak dönemde normalize (100 taban) büyümesi.
+    `benchmark`: baz-100 akran medyan patikası — grafiğin dönemine yeniden bazlanır."""
     pivot, avail = _cmp_pivot(combined, codes)
     if pivot is None:
         return None
@@ -1292,6 +1307,14 @@ def _chart_cmp_growth(combined, codes, path):
     fig, ax = plt.subplots(figsize=(9.6, 3.7))
     for c in avail:
         ax.plot(norm.index, norm[c], label=c, linewidth=1.7, color=_fund_color(codes, c))
+    if benchmark is not None and len(benchmark) >= 2:
+        b = benchmark.copy()
+        b.index = pd.to_datetime(b.index)
+        b = b[(b.index >= df.index[0]) & (b.index <= df.index[-1])]
+        if len(b) >= 2:
+            b = b / b.iloc[0] * 100.0
+            ax.plot(b.index, b.values, label=benchmark_label, linewidth=1.4,
+                    color=MPL_GREY, linestyle="--", zorder=1)
     ax.axhline(100, color=MPL_GREY, linewidth=0.6, linestyle=":")
     ax.set_ylabel("Değer (Başlangıç = 100)", fontsize=9, color=MPL_NAVY)
     ax.set_title("Kümülatif Büyüme (ortak dönem)", fontsize=11, color=MPL_NAVY, fontweight="bold")
@@ -1432,6 +1455,7 @@ def _chart_cmp_radar(met, path):
 _CMP_ROWS = [
     ("Tema", None, lambda r: fund_theme(r.get("Fon Adi"))),
     ("Yıllık Getiri", ("Yillik_Getiri", "high"), lambda r: pct(r.get("Yillik_Getiri"))),
+    ("rf Üzeri Getiri", None, lambda r: "✓" if bool(r.get("Rf_Ustu")) else "—"),
     ("Kuruluş CAGR", ("Yillik_Getiri_Kurulus", "high"), lambda r: pct(r.get("Yillik_Getiri_Kurulus"))),
     ("Volatilite", ("Yillik_Volatilite", "low"), lambda r: pct(r.get("Yillik_Volatilite"))),
     ("Sharpe", ("Sharpe_Orani", "high"), lambda r: fmt(r.get("Sharpe_Orani"), 2)),
@@ -1458,8 +1482,14 @@ def _best_index(met, col, direction):
 
 def generate_comparison(met: pd.DataFrame, combined: pd.DataFrame, fund_type: str,
                         risk_free_rate: float, codes: list[str],
-                        out_path: Path | None = None) -> Path:
-    """Belirli fonları yan yana kıyaslayan PDF üretir; yolu döndürür."""
+                        out_path: Path | None = None,
+                        universe_growth: pd.Series | None = None) -> Path:
+    """Belirli fonları yan yana kıyaslayan PDF üretir; yolu döndürür.
+
+    `universe_growth`: tüm evrenin baz-100 medyan büyüme patikası (pipeline
+    tarafından alt kümeye inmeden hesaplanır). Verilmezse ve en az 3 fon
+    kıyaslanıyorsa grubun kendi medyanı ("Grup medyanı") kullanılır.
+    """
     paths = config.paths_for(fund_type)
     out_path = Path(out_path) if out_path else paths.comparison_pdf
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1471,6 +1501,15 @@ def generate_comparison(met: pd.DataFrame, combined: pd.DataFrame, fund_type: st
     n = len(met)
     styles = _styles()
     today = datetime.now().strftime("%d.%m.%Y")
+    mac = config.macro()
+    dflt = lambda key: " (varsayılan)" if key in mac.defaults_used else ""
+    color_map = {c: FUND_PALETTE[i % len(FUND_PALETTE)] for i, c in enumerate(codes)}
+
+    # Benchmark patikası: evren medyanı; yoksa (>=3 fonda) grup medyanı.
+    bench, bench_label = universe_growth, "Evren medyanı"
+    if bench is None and n >= 3:
+        bench = themes.theme_median_growth(combined, codes=codes, min_funds=3)
+        bench_label = "Grup medyanı"
     story = []
 
     def best_code(col, direction):
@@ -1485,11 +1524,13 @@ def generate_comparison(met: pd.DataFrame, combined: pd.DataFrame, fund_type: st
         Spacer(1, 12 * mm),
         Paragraph(f"Rapor Tarihi: {today}<br/>"
                   f"Karşılaştırılan Fonlar: <b>{', '.join(codes)}</b><br/>"
-                  f"Risksiz Faiz (Benchmark): %{risk_free_rate:.1f} &nbsp;|&nbsp; "
-                  f"Enflasyon: %{config.macro().inflation_rate:.0f}", styles["CoverInfo"]),
+                  f"Risksiz Faiz (Benchmark): %{risk_free_rate:.1f}{dflt('risk_free_rate') if risk_free_rate == mac.risk_free_rate else ''}<br/>"
+                  f"Enflasyon (TÜFE): %{mac.inflation_rate:.0f}{dflt('inflation_rate')} &nbsp;|&nbsp; "
+                  f"Politika Faizi: %{mac.policy_rate:.0f}{dflt('policy_rate')}", styles["CoverInfo"]),
         Spacer(1, 10 * mm),
         Paragraph("Bu rapor kantitatif modellere dayanır ve yatırım tavsiyesi değildir. "
-                  "Fonlar 'olduğu gibi' kıyaslanır; aktiflik/uygunluk filtresi uygulanmaz.", styles["Disclaimer"]),
+                  "Fonlar 'olduğu gibi' kıyaslanır; aktiflik/uygunluk filtresi uygulanmaz — "
+                  "rf karşılaştırması bilgilendirici bir bayraktır.", styles["Disclaimer"]),
     ]
     story += [KeepTogether(cover), PageBreak()]
 
@@ -1560,13 +1601,34 @@ def generate_comparison(met: pd.DataFrame, combined: pd.DataFrame, fund_type: st
 
     # 4) Getiri & büyüme
     story.append(Paragraph("GETİRİ & BÜYÜME", styles["Section"]))
-    g = _chart_cmp_growth(combined, codes, chart_dir / "cmp_growth.png")
+    g = _chart_cmp_growth(combined, codes, chart_dir / "cmp_growth.png",
+                          benchmark=bench, benchmark_label=bench_label)
     if g:
         story += [Image(g, width=236 * mm, height=84 * mm), Spacer(1, 3 * mm)]
     pr = _chart_cmp_periods(met, chart_dir / "cmp_periods.png")
     if pr:
         story.append(Image(pr, width=236 * mm, height=76 * mm))
     story.append(PageBreak())
+
+    # 4b) Aylık getiri takvimi + yuvarlanan metrikler (ana raporla aynı içerik)
+    hm = _chart_monthly_heatmap(combined, codes, chart_dir / "cmp_monthly_hm.png",
+                                median_label="Grup medyanı")
+    roll = _chart_rolling(combined, codes, chart_dir / "cmp_rolling.png",
+                          rf=risk_free_rate, color_map=color_map)
+    if hm:
+        n_hm_rows = len(codes) + 1
+        hm_h = min((0.42 * n_hm_rows + 1.15) / 9.8 * 236, 150)
+        story += [Paragraph("AYLIK GETİRİ TAKVİMİ", styles["Section"]),
+                  Paragraph("Karşılaştırılan fonların ay-ay getirisi ve grubun ay medyanı (son satır). Yeşil pozitif, "
+                            "kırmızı negatif ayları gösterir; gri hücrelerde fonun o ay verisi yoktur. Tutarlı fonlar "
+                            "satır boyunca kesintisiz yeşil ton bırakır.", styles["BodySm"]),
+                  Image(hm, width=236 * mm, height=hm_h * mm), PageBreak()]
+    if roll:
+        story += [Paragraph("YUVARLANAN 63 GÜNLÜK GETİRİ & VOLATİLİTE", styles["Section"]),
+                  Paragraph("Üst panel: 63 işlem günlük pencereden yıllıklandırılmış getiri — kesikli gri çizgi risksiz faiz. "
+                            "Alt panel: aynı pencerede yıllıklandırılmış volatilite. Performansın döneme mi yayıldığını "
+                            "yoksa tek bir sıçramadan mı geldiğini ve risk rejimindeki değişimleri gösterir.", styles["BodySm"]),
+                  Image(roll, width=226 * mm, height=118 * mm), PageBreak()]
 
     # 5) Risk & dayanıklılık
     story.append(Paragraph("RİSK & DAYANIKLILIK", styles["Section"]))
@@ -1591,7 +1653,10 @@ def generate_comparison(met: pd.DataFrame, combined: pd.DataFrame, fund_type: st
                   f"~1 işlem yılı (son {config.SCORING_LOOKBACK_DAYS} gözlem) penceresinde hesaplanır; kuruluş CAGR referanstır. "
                   "Sharpe = (Getiri − Rf)/Volatilite; Sortino aşağı-yön sapmasını, Calmar drawdown'u esas alır. "
                   "VaR/CVaR %95 günlük kayıp eşiğidir (sıfıra yakın daha iyi). Fonlar 'olduğu gibi' kıyaslanır; "
-                  "aktiflik/uygunluk filtresi uygulanmaz.", styles["Body"]),
+                  "aktiflik/uygunluk filtresi uygulanmaz — 'rf Üzeri Getiri' satırı bilgilendirici bir bayraktır. "
+                  f"Büyüme grafiğindeki kesikli gri çizgi {bench_label.lower()} patikasıdır (fonların günlük getiri "
+                  "medyanından bileşiklenir, baz=100). Yuvarlanan 63 günlük getiri log-getirilerden yıllıklandırılır; "
+                  "aylık takvim ay sonu fiyatlarından hesaplanır.", styles["Body"]),
         Paragraph("UYARI: Bu rapor geçmiş TEFAS verisine dayanır; yatırım tavsiyesi değildir. Geçmiş performans geleceği "
                   "garanti etmez. İşlem maliyetleri ve vergi etkileri modellenmemiştir.", styles["Disclaimer"]),
     ]

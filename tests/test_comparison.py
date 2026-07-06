@@ -4,7 +4,7 @@ import pandas as pd
 
 from tefas.cli import _parse_comparison_file
 from tefas import metrics as m
-from tefas import report
+from tefas import report, themes
 
 
 def test_parse_comparison_file():
@@ -39,10 +39,22 @@ def _synthetic_combined():
 
 
 def test_generate_comparison_smoke(tmp_path):
+    """Evren benchmark'ı verilerek tam yol: büyüme çizgisi, ısı haritası, rolling."""
     combined = _synthetic_combined()
     met = m.compute_metrics(combined, risk_free_rate=45.0, keep_suspect=True)
     assert len(met) == 3
     out = report.generate_comparison(met, combined, "YAT", 45.0,
                                      met["Fon Kodu"].tolist(),
-                                     out_path=tmp_path / "cmp.pdf")
-    assert out.exists() and out.stat().st_size > 5000     # geçerli, boş olmayan PDF
+                                     out_path=tmp_path / "cmp.pdf",
+                                     universe_growth=themes.theme_median_growth(combined))
+    assert out.exists() and out.stat().st_size > 20_000   # yeni sayfalarla dolu PDF
+
+
+def test_generate_comparison_without_universe_growth(tmp_path):
+    """universe_growth verilmezse 'Grup medyanı' fallback'i ile yine üretir."""
+    combined = _synthetic_combined()
+    met = m.compute_metrics(combined, risk_free_rate=45.0, keep_suspect=True)
+    out = report.generate_comparison(met, combined, "YAT", 45.0,
+                                     met["Fon Kodu"].tolist(),
+                                     out_path=tmp_path / "cmp2.pdf")
+    assert out.exists() and out.stat().st_size > 20_000
