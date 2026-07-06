@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import shutil
+import tempfile
 
 import numpy as np
 import pandas as pd
@@ -425,7 +427,7 @@ def _chart_risk_contribution(risk, portfolio, path):
     y = np.arange(len(codes))
     w_pct = [wts.get(c, 0) * 100 for c in codes]
     r_pct = [rc.get(c, 0) * 100 for c in codes]
-    fig, ax = plt.subplots(figsize=(9.6, max(2.4, 0.5 * len(codes) + 1.2)))
+    fig, ax = plt.subplots(figsize=(9.6, max(4.0, 0.72 * len(codes) + 1.4)))
     h = 0.38
     b1 = ax.barh(y - h / 2, w_pct, height=h, color=MPL_BLUE, alpha=0.85, label="Ağırlık")
     b2 = ax.barh(y + h / 2, r_pct, height=h, color="#c0622d", alpha=0.9, label="Risk katkısı")
@@ -797,30 +799,71 @@ def _new_opportunities(df: pd.DataFrame, combined: pd.DataFrame | None,
 def _build_portfolio(df):
     plan = [("Conservative", "Muhafazakâr", 2, 22.0), ("Balanced", "Dengeli", 2, 16.0),
             ("Moderate", "Orta", 1, 14.0), ("Aggressive", "Agresif", 1, 10.0)]
-    # Tema tekilliği PORTFÖY genelinde uygulanır (profil başına değil): rapor
-    # "farklı temalardan seçilen" der; profil-içi sıfırlama aynı temadan iki
-    # fonun farklı profiller üzerinden portföye girmesine izin veriyordu.
-    portfolio, used_codes, used_themes = [], set(), set()
+    # Theme diversity is preferred, but not enforced as hard uniqueness.
+    # In narrow filtered universes, empty profile slots are filled with the best remaining funds.
+    # This keeps the sample portfolio representative instead of collapsing to one fund per theme.
+    target_slots = sum(n_sel for score_key, _, n_sel, _ in plan if f"{score_key}_Score" in df.columns)
+    max_theme_count = max(1, int(np.ceil(target_slots * 0.50))) if target_slots else 1
+    portfolio, used_codes, theme_counts = [], set(), {}
+
+    def add_row(r, label, weight, score_col):
+        code, theme = r["Fon Kodu"], fund_theme(r["Fon Adi"])
+        portfolio.append({"Fon Kodu": code, "Fon Adi": r["Fon Adi"], "Profil": label,
+                          "Tema": theme, "Agirlik": weight, "Secim_Skoru": r.get(score_col),
+                          "Yillik_Getiri": r.get("Yillik_Getiri"),
+                          "Yillik_Volatilite": r.get("Yillik_Volatilite"),
+                          "Sharpe_Orani": r.get("Sharpe_Orani")})
+        used_codes.add(code)
+        theme_counts[theme] = theme_counts.get(theme, 0) + 1
     for score_key, label, n_sel, weight in plan:
         col = f"{score_key}_Score"
         if col not in df.columns:
             continue
         picked = 0
-        for _, r in df.sort_values(col, ascending=False).iterrows():
+        ranked = df.sort_values(col, ascending=False)
+        profile_themes = set()
+        for _, r in ranked.iterrows():
             if picked >= n_sel:
                 break
             code, theme = r["Fon Kodu"], fund_theme(r["Fon Adi"])
-            if code in used_codes or theme in used_themes:
+            if code in used_codes or theme in profile_themes or theme_counts.get(theme, 0) >= max_theme_count:
                 continue
-            portfolio.append({"Fon Kodu": code, "Fon Adi": r["Fon Adi"], "Profil": label,
-                              "Tema": theme, "Agirlik": weight, "Yillik_Getiri": r.get("Yillik_Getiri"),
-                              "Yillik_Volatilite": r.get("Yillik_Volatilite"), "Sharpe_Orani": r.get("Sharpe_Orani")})
-            used_codes.add(code); used_themes.add(theme); picked += 1
+            add_row(r, label, weight, col)
+            profile_themes.add(theme)
+            picked += 1
+        for _, r in ranked.iterrows():
+            if picked >= n_sel:
+                break
+            if r["Fon Kodu"] in used_codes:
+                continue
+            add_row(r, label, weight, col)
+            picked += 1
     total = sum(p["Agirlik"] for p in portfolio)
     if total > 0:
         for p in portfolio:
             p["Agirlik"] = p["Agirlik"] / total * 100.0
     return portfolio
+
+
+def _backtest_summary_from_csv(path: Path) -> pd.DataFrame:
+    """Walk-forward fold CSV'sinden raporlanabilir ozet uretir."""
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        folds = pd.read_csv(path, encoding=config.OUTPUT_ENCODING)
+    except Exception:  # noqa: BLE001
+        return pd.DataFrame()
+    required = {"Ufuk_Ay", "Portfoy_Getiri", "Evren_Ort", "Fark"}
+    if not required <= set(folds.columns) or folds.empty:
+        return pd.DataFrame()
+    return (folds.groupby("Ufuk_Ay")
+            .agg(Kat_Sayisi=("Fark", "size"),
+                 Portfoy_Ort=("Portfoy_Getiri", "mean"),
+                 Evren_Ort=("Evren_Ort", "mean"),
+                 Ort_Fark=("Fark", "mean"),
+                 Medyan_Fark=("Fark", "median"),
+                 Isabet_Orani=("Fark", lambda s: float((s > 0).mean())))
+            .round(4).reset_index())
 
 
 def _portfolio_expected(portfolio):
@@ -907,8 +950,7 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
     paths = config.paths_for(fund_type)
     out_path = Path(out_path) if out_path else paths.report_pdf
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    chart_dir = paths.report_pdf.parent / "_charts_tmp"
-    chart_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir = Path(tempfile.mkdtemp(prefix=f"_{out_path.stem}_charts_", dir=out_path.parent))
 
     df = scored.copy()
     extra = [c for c in ["Fon_Toplam_Deger_Milyon_TL", "Fon_Yasi_Yil", "Fon_Kurulus_Tarihi",
@@ -1002,6 +1044,34 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
     bench_bar = _chart_benchmark_bars(df, risk_free_rate, chart_dir / "bench_bar.png")
     if bench_bar:
         story.append(Image(bench_bar, width=232 * mm, height=45 * mm))
+    bt_sum = _backtest_summary_from_csv(paths.backtest_csv)
+    if not bt_sum.empty:
+        story.append(PageBreak())
+        bt_headers = ["Ufuk", "Kat", "Portfoy Ort.", "Evren Ort.", "Ort. Fark",
+                      "Medyan Fark", "Isabet"]
+        bt_rows = [[Paragraph(f"{int(r['Ufuk_Ay'])} ay", styles["CellB"]),
+                    Paragraph(fmt(r["Kat_Sayisi"], 0), styles["Cell"]),
+                    Paragraph(pct(r["Portfoy_Ort"]), styles["Cell"]),
+                    Paragraph(pct(r["Evren_Ort"]), styles["Cell"]),
+                    Paragraph(pct(r["Ort_Fark"]), styles["Cell"]),
+                    Paragraph(pct(r["Medyan_Fark"]), styles["Cell"]),
+                    Paragraph(pct(r["Isabet_Orani"] * 100), styles["Cell"])]
+                   for _, r in bt_sum.iterrows()]
+        story += [
+            Paragraph("MODEL DOGRULAMA - WALK-FORWARD", styles["Section"]),
+            Paragraph("Bu tablo, onerilen skorlama ve portfoy kurma kuralinin her ay sonunda yalnizca "
+                      "o tarihe kadar bilinen veriyle secim yaptiginda sonraki donemde evren ortalamasini "
+                      "asip asmadigini gosterir. Kat sayisi sinirli oldugu icin istatistiksel kanit degil; "
+                      "modelin ileriye donuk sinyal tasiyip tasimadigina dair disiplinli bir saglamadir.",
+                      styles["BodySm"]),
+            _make_table(bt_headers, bt_rows,
+                        [18 * mm, 14 * mm, 25 * mm, 25 * mm, 24 * mm, 27 * mm, 20 * mm],
+                        styles, align_right_from=1),
+            Spacer(1, 2 * mm),
+            Paragraph(f"Kaynak: {paths.backtest_csv.name}. Skor/profil agirliklari degistirildiginde "
+                      "bu backtest yeniden calistirilmali ve PDF bu ozetle guncellenmelidir.",
+                      styles["Disclaimer"]),
+        ]
     story.append(PageBreak())
 
     # 3. Yönetici özeti
@@ -1230,8 +1300,10 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
                 f"<b>Beklenen yıllık getiri (ağırlıklı):</b> %{exp_ret:.1f}<br/>"
                 f"<b>Tahmini portföy volatilitesi:</b> %{vol_lo:.1f} – %{vol_hi:.1f} (çeşitlendirme bandı)<br/>"
                 f"<b>Fon/tema sayısı:</b> {len(portfolio)} / {len({p['Tema'] for p in portfolio})}")
-        story.append(Paragraph("Farklı risk profillerinden ve farklı temalardan seçilen, sermaye koruması ağırlıklı örnek bir portföy. "
-                               "Portföy volatilitesi fonların gerçek günlük getiri kovaryansından hesaplanır.", styles["BodySm"]))
+        story.append(Paragraph("Farkli risk profillerinden secilen ve tema yogunlasmasi mumkun oldugunca sinirlanan "
+                               "ornek bir portfoy. Filtrelenmis evren az temaliysa bos profil slotlari en iyi kalan "
+                               "fonlarla doldurulur; portfoy volatilitesi fonlarin gercek gunluk getiri kovaryansindan "
+                               "hesaplanir.", styles["BodySm"]))
         pie = _chart_allocation(portfolio, chart_dir / "allocation.png")
         ph = ["Kod", "Fon Adı", "Profil", "Tema", "Ağırlık", "Yıl. Get.", "Volat."]
         pcw = [13 * mm, 50 * mm, 22 * mm, 30 * mm, 16 * mm, 16 * mm, 16 * mm]
@@ -1260,7 +1332,12 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
                 story += [Spacer(1, 2 * mm),
                           Paragraph("Ağırlık vs. gerçek risk katkısı: yüksek volatiliteli veya güçlü korele bir fon, portföy "
                                     "ağırlığının üzerinde risk taşır (RC_i = w_i·(Σw)_i / (w'·Σ·w)).", styles["BodySm"]),
-                          Image(rc_chart, width=236 * mm, height=54 * mm)]
+                          PageBreak(),
+                          Paragraph("PORTFÖY RİSK KATKISI", styles["Section"]),
+                          Paragraph("Ağırlık ile gerçek risk katkısı farklı şeylerdir: yüksek volatilite veya güçlü korelasyon "
+                                    "taşıyan bir fon, portföy ağırlığından daha büyük risk payı yaratabilir.",
+                                    styles["BodySm"]),
+                          Image(rc_chart, width=236 * mm, height=126 * mm)]
 
         # Portföyün kümülatif değeri + sualtı (drawdown) eğrisi — ayrı sayfa
         uw_chart = _chart_portfolio_underwater(combined, portfolio, chart_dir / "port_uw.png")
@@ -1378,9 +1455,7 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
 
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     try:
-        for p in chart_dir.glob("*.png"):
-            p.unlink()
-        chart_dir.rmdir()
+        shutil.rmtree(chart_dir)
     except OSError:
         pass
 
@@ -1605,8 +1680,7 @@ def generate_comparison(met: pd.DataFrame, combined: pd.DataFrame, fund_type: st
     paths = config.paths_for(fund_type)
     out_path = Path(out_path) if out_path else paths.comparison_pdf
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    chart_dir = out_path.parent / "_cmp_charts_tmp"
-    chart_dir.mkdir(parents=True, exist_ok=True)
+    chart_dir = Path(tempfile.mkdtemp(prefix=f"_{out_path.stem}_charts_", dir=out_path.parent))
 
     met = met.reset_index(drop=True)
     codes = met["Fon Kodu"].tolist()
@@ -1788,9 +1862,7 @@ def generate_comparison(met: pd.DataFrame, combined: pd.DataFrame, fund_type: st
 
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
     try:
-        for p in chart_dir.glob("*.png"):
-            p.unlink()
-        chart_dir.rmdir()
+        shutil.rmtree(chart_dir)
     except OSError:
         pass
 

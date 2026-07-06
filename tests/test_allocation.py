@@ -55,7 +55,7 @@ def test_build_portfolio_picks_top_scores_first():
     df = _scored_frame()
     df["Conservative_Score"] = [95, 90, 10, 10, 10, 10, 10, 10]  # AAA, BBB en iyi
     port = _build_portfolio(df)
-    cons = [p for p in port if p["Profil"] == "Muhafazakâr"]
+    cons = [p for p in port if p["Profil"].startswith("Muhafazak")]
     assert [p["Fon Kodu"] for p in cons] == ["AAA", "BBB"]
     # Muhafazakâr dilim (2 × 22) toplamın %44'ü olmalı (tam 6 fon seçildiyse)
     if len(port) == 6:
@@ -68,10 +68,28 @@ def test_build_portfolio_theme_dedup():
     df.loc[df["Fon Kodu"] == "BBB", "Fon Adi"] = "BBB HISSE FONU"  # AAA ile aynı tema
     df["Conservative_Score"] = [95, 94, 50, 40, 30, 20, 10, 5]
     port = _build_portfolio(df)
-    cons_codes = [p["Fon Kodu"] for p in port if p["Profil"] == "Muhafazakâr"]
+    cons_codes = [p["Fon Kodu"] for p in port if p["Profil"].startswith("Muhafazak")]
     assert cons_codes[0] == "AAA"
     assert "BBB" not in cons_codes                   # tema çakışması → atlandı
-    assert len(set(p["Tema"] for p in port)) == len(port)
+    assert max(pd.Series([p["Tema"] for p in port]).value_counts()) <= 3
+
+
+def test_build_portfolio_fills_narrow_theme_universe():
+    codes = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG", "HHH"]
+    df = _scored_frame(codes)
+    df["Fon Adi"] = [
+        "AAA HISSE SENEDI FONU", "BBB HISSE SENEDI FONU",
+        "CCC HISSE SENEDI FONU", "DDD HISSE SENEDI FONU",
+        "EEE KATILIM FONU", "FFF KATILIM FONU",
+        "GGG KATILIM FONU", "HHH KATILIM FONU",
+    ]
+    for col in ["Conservative_Score", "Balanced_Score", "Moderate_Score", "Aggressive_Score"]:
+        df[col] = np.linspace(100, 10, len(df))
+    port = _build_portfolio(df)
+    assert len(port) == 6
+    assert len({p["Tema"] for p in port}) == 2
+    assert max(pd.Series([p["Tema"] for p in port]).value_counts()) <= 3
+    assert sum(p["Agirlik"] for p in port) == pytest.approx(100.0)
 
 
 def test_build_portfolio_missing_profile_renormalizes():

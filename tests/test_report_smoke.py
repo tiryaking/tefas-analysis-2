@@ -119,3 +119,19 @@ def test_heatmap_all_positive_months(tmp_path):
             rows.append({"Fon Kodu": code, "Fon Adi": f"{code} FON", "Tarih": d, "Fiyat": price})
     out = report._chart_monthly_heatmap(pd.DataFrame(rows), ["AAA", "BBB"], tmp_path / "hm.png")
     assert out is not None and (tmp_path / "hm.png").exists()
+
+
+def test_backtest_summary_from_csv(tmp_path):
+    p = tmp_path / "bt.csv"
+    pd.DataFrame({
+        "Tarih": ["2025-01-31", "2025-02-28", "2025-01-31"],
+        "Ufuk_Ay": [1, 1, 3],
+        "Portfoy_Getiri": [2.0, 1.0, 6.0],
+        "Evren_Ort": [1.0, 2.0, 3.0],
+        "Fark": [1.0, -1.0, 3.0],
+    }).to_csv(p, index=False, encoding="utf-8-sig")
+    out = report._backtest_summary_from_csv(p)
+    one = out[out["Ufuk_Ay"] == 1].iloc[0]
+    assert one["Kat_Sayisi"] == 2
+    assert one["Ort_Fark"] == 0.0
+    assert one["Isabet_Orani"] == 0.5
