@@ -48,10 +48,41 @@ def test_sortino_ratio():
     assert np.isnan(m.sortino_ratio([1, 1, 1, 1], 50, 0))
 
 
+def test_sortino_geometric_daily_rf():
+    """Sortino'nun günlük rf eşiği yıllık oranın GEOMETRİK eşdeğeridir:
+    (1+rf)^(1/252)−1 — lineer rf/252 değil (yüksek oranlarda eşiği abartır)."""
+    rf = 65.0
+    daily_rf = ((1.0 + rf / 100.0) ** (1.0 / 252) - 1.0) * 100.0
+    assert daily_rf < rf / 252                      # geometrik < lineer
+    rets = [1.0, -1.0, 1.0, -1.0]
+    downside = np.minimum(np.array(rets) - daily_rf, 0.0)
+    ann_dd = np.sqrt(np.mean(downside ** 2)) * np.sqrt(252)
+    expected = (80.0 - rf) / ann_dd
+    assert m.sortino_ratio(rets, 80.0, rf) == pytest.approx(expected, rel=1e-9)
+
+
 def test_calmar_ratio():
     assert m.calmar_ratio(50, 25, 10) == pytest.approx(1.6)
     assert np.isnan(m.calmar_ratio(50, 0.1, 10))   # mdd < MIN_DD
     assert np.isnan(m.calmar_ratio(np.nan, 25, 10))
+
+
+def test_historical_var_cvar_golden():
+    """Altın değerler: -1..-100 getiri dizisinde (np.percentile lineer interp.)
+    VaR95 = -95.05, VaR99 = -99.01, CVaR95 = mean(-100..-96) = -98."""
+    daily = [-float(i) for i in range(1, 101)]
+    out = m.historical_var_cvar(daily)
+    assert out["VaR_95"] == pytest.approx(-95.05)
+    assert out["VaR_99"] == pytest.approx(-99.01)
+    assert out["CVaR_95"] == pytest.approx(-98.0)
+
+
+def test_historical_var_cvar_min_obs():
+    out = m.historical_var_cvar([-1.0, 2.0, -3.0])          # < 20 gözlem
+    assert all(np.isnan(v) for v in out.values())
+    # NaN'lar sayımdan düşer: 19 geçerli + NaN'lar yine yetersiz
+    out2 = m.historical_var_cvar(list(range(19)) + [np.nan] * 5)
+    assert all(np.isnan(v) for v in out2.values())
 
 
 def test_after_fee_return():

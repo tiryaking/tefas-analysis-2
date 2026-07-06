@@ -311,6 +311,15 @@ def main(argv=None) -> int:
     prep = sub.add_parser("report", help="PDF rapor üret (skorlu + metrik parquet'ten)")
     _common(prep)
 
+    pb = sub.add_parser("backtest", help="Walk-forward doğrulama: skorlar ileriye dönük sinyal taşıyor mu?")
+    _common(pb)
+    pb.add_argument("--horizons", nargs="+", type=int, default=[1, 3], metavar="AY",
+                    help="İleri getiri ufukları (ay), örn. --horizons 1 3")
+    pb.add_argument("--step-months", type=int, default=1, help="Katlar arası adım (ay)")
+    pb.add_argument("--min-history-days", type=int, default=140,
+                    help="İlk kat için gereken asgari geçmiş (takvim günü)")
+    pb.add_argument("--no-active-only", action="store_true")
+
     pc = sub.add_parser("compare", help="Belirli fonları karşılaştır (tablo + grafik PDF)")
     _common(pc)
     pc.add_argument("--codes", default=None,
@@ -328,7 +337,9 @@ def main(argv=None) -> int:
     cfg = _load_config(args.config) if getattr(args, "config", None) else {}
 
     fund_type = (args.fund_type or cfg.get("fund_type") or "YAT").upper()
-    rfr = args.risk_free_rate if args.risk_free_rate is not None else cfg.get("risk_free_rate", config.macro().risk_free_rate)
+    # getattr: `etl` alt-komutu rf argümanı taşımaz (ETL rf kullanmaz)
+    rfr_arg = getattr(args, "risk_free_rate", None)
+    rfr = rfr_arg if rfr_arg is not None else cfg.get("risk_free_rate", config.macro().risk_free_rate)
     paths = config.paths_for(fund_type)
 
     if args.cmd == "run":
@@ -381,6 +392,25 @@ def main(argv=None) -> int:
         scored = pipeline._read_parquet(paths.scored_parquet)
         combined = pipeline._read_parquet(paths.combined_parquet)
         report.generate(scored, met, fund_type, rfr, combined=combined)
+        return 0
+
+    if args.cmd == "backtest":
+        from . import backtest as bt
+        # Önce ETL önbelleği; yoksa taze yükle.
+        if paths.combined_parquet.exists() and not args.no_active_only:
+            combined = pipeline._read_parquet(paths.combined_parquet)
+            print(f"[INFO] ETL önbelleği kullanılıyor: {paths.combined_parquet.name}")
+        else:
+            combined = etl.load_combined(fund_type, active_only=not args.no_active_only)
+        result = bt.run_backtest(combined, rfr, horizons=tuple(args.horizons),
+                                 min_history_days=args.min_history_days,
+                                 step_months=args.step_months)
+        if result is None:
+            return 1
+        config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        result.folds.to_csv(paths.backtest_csv, index=False, encoding=config.OUTPUT_ENCODING)
+        print(f"\n[OK] Kat detayı: {paths.backtest_csv}")
+        bt.print_summary(result, rfr)
         return 0
 
     return 1

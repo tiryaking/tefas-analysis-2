@@ -6,10 +6,13 @@ FINDING #5 — v1 `advanced_portfolio_analyzer.py` 1300+ satırdı ve çoğu öl
 bağımlı). Burada yalnızca raporun gerçekten kullandığı skorlama mantığı
 (percentile-rank, üçgensel volatilite bandı).
 
-NOT — Alpha/Beta/Treynor/Information Ratio metrikleri kaldırıldı: geçerli bir
-piyasa benchmark'ı (örn. XU100) fon veri setinde bulunmadığından bunlar sessizce
-eşit-ağırlıklı fon-ortalamasına göre hesaplanıyordu; bu CAPM/aktif-getiri
-yorumunu geçersiz kılıyordu. Yanlış güven vermemek için tamamen çıkarıldı.
+NOT — Alpha/Beta/Treynor/Information Ratio metrikleri buradan kaldırıldı:
+geçerli bir piyasa benchmark'ı olmadan eşit-ağırlıklı fon-ortalamasına göre
+hesaplanıyorlardı; bu CAPM/aktif-getiri yorumunu geçersiz kılıyordu. Gerçek dış
+benchmark serisi mevcutsa (Dataset/benchmarks/) bu metrikler artık
+`benchmarks.add_relative_metrics` ile METRİK katmanında hesaplanır; skor
+bileşimine dahil DEĞİLDİR (ağırlık değişikliği walk-forward doğrulama ister,
+bkz. backtest.py).
 """
 from __future__ import annotations
 

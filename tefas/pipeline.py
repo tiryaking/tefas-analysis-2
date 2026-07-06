@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import config, etl, metrics, scoring, report, themes
+from . import benchmarks, config, etl, metrics, scoring, report, themes
 from .io_utils import setup_utf8
 
 
@@ -52,6 +52,15 @@ def run(fund_type: str = "YAT", risk_free_rate: float | None = None, *,
     # 2) Metrikler
     met = metrics.compute_metrics(combined, risk_free_rate, keep_suspect=keep_suspect,
                                   min_aum=min_aum, min_fund_age=min_fund_age)
+
+    # 2b) Göreli (benchmark) metrikler — Beta/Alpha/TE/IR, yalnızca
+    # Dataset/benchmarks/ altında gerçek endeks serisi varsa hesaplanır.
+    bench_data = benchmarks.load_benchmarks()
+    if bench_data:
+        met = benchmarks.add_relative_metrics(met, combined, bench_data, risk_free_rate)
+    else:
+        print("[INFO] Benchmark serisi yok (Dataset/benchmarks boş) — Beta/Alpha/TE/IR atlandı.")
+
     met.to_parquet(paths.metrics_parquet, index=False)
     met.to_csv(paths.metrics_csv, index=False, encoding=config.OUTPUT_ENCODING)
     print(f"[INFO] Metrikler: {len(met)} fon -> {paths.metrics_csv.name}")

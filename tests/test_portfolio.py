@@ -81,6 +81,95 @@ def test_portfolio_drawdown_shape():
     assert (dd >= -1e-9).all()                    # drawdown negatif olmamalı (pozitif % kayıp)
 
 
+def test_returns_matrix_union_keeps_long_window():
+    """dropna='all': kısa geçmişli fon uzun fonların penceresini KIRPMAZ."""
+    long_rng = pd.date_range("2025-01-01", periods=100, freq="B")
+    short_rng = long_rng[-30:]
+    rows = [{"Tarih": d, "Fon Kodu": "LONG", "Fiyat": 100 + i} for i, d in enumerate(long_rng)]
+    rows += [{"Tarih": d, "Fon Kodu": "SHRT", "Fiyat": 50 + i} for i, d in enumerate(short_rng)]
+    combined = pd.DataFrame(rows)
+    inter = pf.returns_matrix(combined, ["LONG", "SHRT"])                 # kesişim
+    union = pf.returns_matrix(combined, ["LONG", "SHRT"], dropna="all")   # birleşim
+    assert len(inter) == 29                     # kısa fonun penceresi
+    assert len(union) == 99                     # uzun fonun tüm getirileri korunur
+    assert union["LONG"].notna().sum() == 99
+    assert union["SHRT"].notna().sum() == 29
+
+
+def test_shrunk_covariance_matches_raw_when_identical():
+    """Özdeş iki seri: sabit-korelasyon hedefi = ham matris → büzülme etkisiz."""
+    rng = np.random.default_rng(7)
+    a = rng.normal(0, 1, 120)
+    df = pd.DataFrame({"A": a, "B": a})
+    cov, info = pf.shrunk_covariance(df)
+    raw = df.cov().to_numpy() * TD
+    assert cov == pytest.approx(raw, rel=1e-9)
+    assert 0.0 <= info["delta"] <= 1.0
+    assert info["t_min"] == 120
+
+
+def test_shrunk_covariance_short_history_fund():
+    """Kısa geçmişli fon eklemek uzun çiftin tahmin penceresini değiştirmez
+    ve matris PSD kalır (portföy varyansı >= 0)."""
+    rng = np.random.default_rng(11)
+    n = 150
+    idx = pd.date_range("2025-01-01", periods=n, freq="B")
+    df = pd.DataFrame({
+        "A": rng.normal(0.1, 1.0, n),
+        "B": rng.normal(0.1, 1.2, n),
+        "C": np.concatenate([np.full(n - 25, np.nan), rng.normal(0.1, 2.0, 25)]),
+    }, index=idx)
+    cov, info = pf.shrunk_covariance(df)
+    assert cov is not None
+    assert info["t_min"] == 25 and info["t_max"] == n
+    # A-B çifti kendi 150 gözleminden tahmin edilir (kesişimde 25'e düşerdi)
+    ab_raw = df[["A", "B"]].cov().iloc[0, 1] * TD
+    # büzülme köşegen-dışını hedefe çeker ama işaret/ölçek makul kalmalı
+    assert np.isfinite(cov[0, 1])
+    assert abs(cov[0, 1] - ab_raw) < abs(ab_raw) + 5.0
+    w = np.array([0.4, 0.4, 0.2])
+    assert float(w @ cov @ w) >= 0.0            # PSD
+
+
+def test_shrunk_covariance_insufficient_overlap():
+    df = pd.DataFrame({"A": [1.0, -1.0, 0.5] + [np.nan] * 30,
+                       "B": [np.nan] * 30 + [1.0, 0.5, -0.5]})
+    cov, info = pf.shrunk_covariance(df)
+    assert cov is None and info["t_min"] < pf.MIN_PAIR_OVERLAP
+
+
+def test_prune_short_overlap_drops_thin_fund():
+    n = 100
+    df = pd.DataFrame({
+        "A": np.random.default_rng(1).normal(size=n),
+        "B": np.random.default_rng(2).normal(size=n),
+        "C": np.concatenate([np.full(n - 5, np.nan), np.ones(5)]),   # 5 gözlem
+    })
+    pruned = pf._prune_short_overlap(df)
+    assert list(pruned.columns) == ["A", "B"]
+
+
+def test_portfolio_risk_reports_effective_window():
+    rng = pd.date_range("2025-01-01", periods=120, freq="B")
+    gen = np.random.default_rng(42)
+    rows = []
+    for code, scale in [("AAA", 0.5), ("BBB", 1.0), ("CCC", 1.5)]:
+        price = 100.0
+        for d in rng:
+            price *= 1.0 + gen.normal(0.0005, 0.01) * scale
+            rows.append({"Tarih": d, "Fon Kodu": code, "Fiyat": price})
+    combined = pd.DataFrame(rows)
+    portfolio = [{"Fon Kodu": "AAA", "Agirlik": 40.0},
+                 {"Fon Kodu": "BBB", "Agirlik": 35.0},
+                 {"Fon Kodu": "CCC", "Agirlik": 25.0}]
+    res = pf.portfolio_risk(combined, portfolio)
+    assert res is not None
+    assert res["effective_days"] == 119
+    assert 0.0 <= res["shrinkage"] <= 1.0
+    assert res["dropped_codes"] == []
+    assert res["portfolio_vol"] >= 0
+
+
 def test_portfolio_risk_summary():
     rng = pd.date_range("2025-01-01", periods=60, freq="B")
     rows = []

@@ -81,8 +81,15 @@ def load_combined(fund_type: str, *, include: list[str] | None = None,
             combined = combined[combined["Fon Kodu"].isin(codes)].copy()
             print(f"[INFO] Aktif fon filtresi: {before} -> {combined['Fon Kodu'].nunique()} fon")
         else:
-            print(f"[WARN] platform_status yok ({paths.platform_status.name}); "
-                  "tüm fonlar tutuluyor.")
+            # Sessiz WARN yeterince görünür değildi: aktiflik filtresi istenmişken
+            # dosya yoksa YAT ve EMK evrenleri fark edilmeden farklı davranıyordu
+            # (EMK'da kapanmış fonlar analize karışıyordu). Açıkça durdur.
+            raise FileNotFoundError(
+                f"platform_status dosyası yok: {paths.platform_status}\n"
+                f"  Aktif-fon filtresi (active_only=True) bu dosya olmadan uygulanamaz. İki seçenek:\n"
+                f"  1) Dosyayı üretin:  python GetDataSet/fetch_platform_status.py --fund-type {paths.fund_type}\n"
+                f"  2) Filtreyi kapatın: `--no-active-only` bayrağı veya config'te \"active_only\": false\n"
+                f"     (bu durumda kapanmış/işlem görmeyen fonlar da analize dahil olur — survivorship notuna bakın).")
 
     if combined.empty:
         raise ValueError("Filtrelerden sonra fon kalmadı.")

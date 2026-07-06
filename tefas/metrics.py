@@ -89,7 +89,10 @@ def sortino_ratio(daily_returns_pct, annual_return: float, risk_free_rate: float
     s = pd.Series(daily_returns_pct, dtype="float64").dropna()
     if len(s) < 2 or pd.isna(annual_return):
         return np.nan
-    daily_rf = risk_free_rate / trading_days
+    # Yıllık rf'nin GEOMETRİK günlük eşdeğeri: (1+rf)^(1/252) − 1. Lineer bölme
+    # (rf/252) düşük oranlarda zararsızdır ama yüksek oranlarda (örn. %65)
+    # günlük eşiği abartıp fazla günü "aşağı yönlü" sayıyordu.
+    daily_rf = ((1.0 + risk_free_rate / 100.0) ** (1.0 / trading_days) - 1.0) * 100.0
     downside = np.minimum(s.to_numpy() - daily_rf, 0.0)
     annualized_downside = float(np.sqrt(np.mean(downside ** 2)) * np.sqrt(trading_days))
     if pd.isna(annualized_downside) or annualized_downside < MIN_DOWNSIDE_ANNUAL:
@@ -104,6 +107,25 @@ def calmar_ratio(annual_return: float, mdd: float, risk_free_rate: float) -> flo
         return np.nan
     ratio = (annual_return - risk_free_rate) / mdd
     return float(min(ratio, MAX_RATIO) if ratio > 0 else max(ratio, -MAX_RATIO))
+
+
+def historical_var_cvar(daily_returns_pct, min_obs: int = 20) -> dict:
+    """
+    Tarihsel (parametrik olmayan) VaR/CVaR — GÜNLÜK ufuk, yüzde cinsinden.
+
+    VaR_95 = günlük getirilerin 5. yüzdeliği (kötü bir günün eşiği, negatif
+    bir getiri değeri); CVaR_95 = o eşiğin altındaki getirilerin ortalaması.
+    Yıllıklandırılmaz — raporda "1 günlük" olarak etiketlenir. Kuyruk
+    metrikleri HAM (winsorize edilmemiş) getirilerle beslenmelidir.
+    """
+    s = pd.Series(daily_returns_pct, dtype="float64").dropna()
+    if len(s) < min_obs:
+        return {"VaR_95": np.nan, "VaR_99": np.nan, "CVaR_95": np.nan}
+    arr = s.to_numpy()
+    var95 = float(np.percentile(arr, 5))
+    var99 = float(np.percentile(arr, 1))
+    cvar95 = float(arr[arr <= var95].mean())
+    return {"VaR_95": var95, "VaR_99": var99, "CVaR_95": cvar95}
 
 
 def period_return(dates, prices, last_ts, offset) -> float:
@@ -214,11 +236,8 @@ def compute_fund_metrics(group: pd.DataFrame, risk_free_rate: float) -> dict:
     en_iyi = daily.max() if len(daily) >= 1 else np.nan
     poz = (daily > 0).sum() / len(daily) * 100 if len(daily) >= 1 else np.nan
 
-    var95 = var99 = cvar95 = np.nan
-    if len(daily) >= 20:
-        var95 = np.percentile(daily, 5)
-        var99 = np.percentile(daily, 1)
-        cvar95 = daily[daily <= var95].mean()
+    tail = historical_var_cvar(daily)
+    var95, var99, cvar95 = tail["VaR_95"], tail["VaR_99"], tail["CVaR_95"]
 
     # Aylık tutarlılık (pencere içi): pozitif ay oranı ve aylık getiri dağılımı.
     # Günlük gürültüden bağımsız, tutarlılık skoru için (bkz. scoring._consistency).

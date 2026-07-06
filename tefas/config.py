@@ -167,6 +167,7 @@ class Paths:
     metrics_csv: Path
     scored_parquet: Path
     scored_csv: Path
+    backtest_csv: Path
     report_pdf: Path
     comparison_pdf: Path
 
@@ -186,6 +187,7 @@ def paths_for(fund_type: str) -> Paths:
         metrics_csv=OUTPUT_DIR / f"tefas_financial_metrics_{suffix}.csv",
         scored_parquet=OUTPUT_DIR / f"advanced_portfolio_recommendations_{suffix}.parquet",
         scored_csv=OUTPUT_DIR / f"advanced_portfolio_recommendations_{suffix}.csv",
+        backtest_csv=OUTPUT_DIR / f"backtest_walkforward_{suffix}.csv",
         report_pdf=REPORTS_DIR / f"{CONSOLIDATED_REPORT_BASENAME}_{suffix}.pdf",
         comparison_pdf=REPORTS_DIR / f"{COMPARISON_REPORT_BASENAME}_{suffix}.pdf",
     )

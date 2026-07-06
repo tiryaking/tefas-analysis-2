@@ -34,7 +34,7 @@ from reportlab.platypus import (
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-from . import config, portfolio as pf, themes
+from . import config, portfolio as pf, scoring, themes
 from .themes import fund_theme  # geriye uyumluluk: report.fund_theme kullanılıyordu
 
 NAVY = colors.HexColor("#13294b")
@@ -246,7 +246,8 @@ def _chart_risk_return(df, highlight_codes, path):
 
 
 def _chart_growth_history(combined, codes, path, color_map=None, benchmark=None,
-                          benchmark_label="Evren medyanı"):
+                          benchmark_label="Evren medyanı",
+                          title="Öne Çıkan Fonların Kümülatif Büyümesi"):
     """Öne çıkan fonların ortak dönemde büyümesi. `color_map` fon→renk eşlemesi
     (tear-sheet/detay sayfalarıyla tutarlı); `benchmark` baz-100 akran patikası."""
     if combined is None or not codes:
@@ -273,7 +274,7 @@ def _chart_growth_history(combined, codes, path, color_map=None, benchmark=None,
             ax.plot(b.index, b.values, label=benchmark_label, linewidth=1.4,
                     color=MPL_GREY, linestyle="--", zorder=1)
     ax.set_ylabel("Sermaye (Başlangıç = 100 TL)", fontsize=9, color=MPL_NAVY)
-    ax.set_title("Öne Çıkan Fonların Kümülatif Büyümesi", fontsize=11, color=MPL_NAVY, fontweight="bold")
+    ax.set_title(title, fontsize=11, color=MPL_NAVY, fontweight="bold")
     ax.grid(True, alpha=0.25, linestyle="--")
     import matplotlib.dates as mdates
     ax.xaxis.set_major_locator(mdates.AutoDateLocator())
@@ -751,15 +752,60 @@ def _fund_detail_flowables(row, combined, scored_df, theme_meds, styles, chart_d
     return flow
 
 
+def _new_opportunities(df: pd.DataFrame, combined: pd.DataFrame | None,
+                       min_months: int = 2, max_months: int = 6) -> pd.DataFrame:
+    """Yeni fırsat taraması: verideki ilk fiyat günü (kuruluş vekili) rapor
+    referans tarihinden en az `min_months`, en çok `max_months` ay önce olan
+    genç fonlar. Bu fonların çoğunda yıllıklandırılmış getiri/Sharpe henüz
+    hesaplanamaz (< 63 gözlem NaN döner); bu yüzden Fırsat Skoru kohort-İÇİ
+    yüzdelik sıralardan, kısa pencerede anlamlı metriklerle kurulur:
+    3A getiri %30, 1A getiri %25, pozitif gün oranı %20, düşük drawdown %15,
+    AUM/likidite %10. Veri setinin ilk gününe yapışık başlayan seriler
+    (kesik geçmiş — fon aslında daha yaşlı olabilir) elenir.
+    """
+    if "Fon_Kurulus_Tarihi" not in df.columns:
+        return df.iloc[0:0]
+    kurulus = pd.to_datetime(df["Fon_Kurulus_Tarihi"], errors="coerce")
+    if combined is not None and len(combined):
+        dates = pd.to_datetime(combined["Tarih"])
+        ref, data_start = dates.max(), dates.min()
+    else:
+        ref, data_start = pd.Timestamp(datetime.now().date()), None
+    mask = (kurulus <= ref - pd.DateOffset(months=min_months)) & \
+           (kurulus >= ref - pd.DateOffset(months=max_months))
+    if data_start is not None:
+        mask &= kurulus > data_start + pd.Timedelta(days=5)
+    mask &= pd.to_numeric(df["Veri_Noktasi_Sayisi"], errors="coerce") >= config.MIN_DATA_POINTS
+    mask &= pd.to_numeric(df["Getiri_1A"], errors="coerce").notna()
+    cohort = df[mask.fillna(False)].copy()
+    if cohort.empty:
+        return cohort
+    cohort["Yas_Ay"] = ((ref - kurulus[cohort.index]).dt.days / 30.44).round(1)
+    aum = cohort["Fon_Toplam_Deger_Milyon_TL"] if "Fon_Toplam_Deger_Milyon_TL" in cohort.columns \
+        else pd.Series(np.nan, index=cohort.index)
+    pr = scoring._pct_rank
+    cohort["Firsat_Skoru"] = (
+        0.30 * pr(cohort["Getiri_3A"]) +
+        0.25 * pr(cohort["Getiri_1A"]) +
+        0.20 * pr(cohort["Pozitif_Gun_Orani"]) +
+        0.15 * pr(cohort["Max_Drawdown"], ascending=False) +
+        0.10 * pr(aum)
+    ).round(1)
+    return cohort.sort_values("Firsat_Skoru", ascending=False)
+
+
 def _build_portfolio(df):
     plan = [("Conservative", "Muhafazakâr", 2, 22.0), ("Balanced", "Dengeli", 2, 16.0),
             ("Moderate", "Orta", 1, 14.0), ("Aggressive", "Agresif", 1, 10.0)]
-    portfolio, used_codes = [], set()
+    # Tema tekilliği PORTFÖY genelinde uygulanır (profil başına değil): rapor
+    # "farklı temalardan seçilen" der; profil-içi sıfırlama aynı temadan iki
+    # fonun farklı profiller üzerinden portföye girmesine izin veriyordu.
+    portfolio, used_codes, used_themes = [], set(), set()
     for score_key, label, n_sel, weight in plan:
         col = f"{score_key}_Score"
         if col not in df.columns:
             continue
-        used_themes, picked = set(), 0
+        picked = 0
         for _, r in df.sort_values(col, ascending=False).iterrows():
             if picked >= n_sel:
                 break
@@ -1115,6 +1161,51 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
         story.append(KeepTogether(block))
     story.append(PageBreak())
 
+    # 6b. Yeni fırsatlar — 2–6 ay önce kurulmuş genç fonlar
+    newops = _new_opportunities(df, combined)
+    if len(newops):
+        top_new = newops.head(8)
+        fmt_date = lambda v: pd.to_datetime(v).strftime("%d.%m.%Y") if pd.notna(v) else "—"
+        no_headers = ["Kod", "Fon Adı", "Tema", "Kuruluş", "Yaş (ay)", "AUM (mn)",
+                      "1A", "3A", "Volat.", "Max DD", "Poz. Gün", "Fırsat"]
+        no_cw = [13 * mm, 51 * mm, 27 * mm, 19 * mm, 14 * mm, 16 * mm,
+                 14 * mm, 14 * mm, 14 * mm, 14 * mm, 14 * mm, 12 * mm]
+        no_rows = [[Paragraph(_code_label(r), styles["CellB"]),
+                    Paragraph(short_name(r["Fon Adi"], 44), styles["Cell"]),
+                    Paragraph(str(r.get("Tema")) if pd.notna(r.get("Tema")) else fund_theme(r["Fon Adi"]), styles["Cell"]),
+                    Paragraph(fmt_date(r.get("Fon_Kurulus_Tarihi")), styles["Cell"]),
+                    Paragraph(fmt(r.get("Yas_Ay"), 1), styles["Cell"]),
+                    Paragraph(fmt(r.get("Fon_Toplam_Deger_Milyon_TL"), 0), styles["Cell"]),
+                    Paragraph(pct(r.get("Getiri_1A")), styles["Cell"]),
+                    Paragraph(pct(r.get("Getiri_3A")), styles["Cell"]),
+                    Paragraph(pct(r.get("Yillik_Volatilite")), styles["Cell"]),
+                    Paragraph(pct(r.get("Max_Drawdown")), styles["Cell"]),
+                    Paragraph(pct(r.get("Pozitif_Gun_Orani"), 0), styles["Cell"]),
+                    Paragraph(fmt(r.get("Firsat_Skoru"), 1), styles["CellB"])]
+                   for _, r in top_new.iterrows()]
+        story += [
+            Paragraph("YENİ FIRSATLAR — YENİ KURULAN FONLAR", styles["Section"]),
+            Paragraph(f"Verideki ilk fiyat gününe göre <b>2–6 ay önce</b> kurulmuş {len(newops)} genç fon tarandı; "
+                      "aşağıda Fırsat Skoruna göre en iyileri listelenir. Bu fonlar kısa geçmişleri nedeniyle ana "
+                      "öneri listelerine henüz giremez; erken dönem performansı güçlü olanları radara almak için ayrı "
+                      "değerlendirilir. <b>Fırsat Skoru</b> yalnızca bu kohort içindeki yüzdelik sıralardan hesaplanır: "
+                      "3 aylık getiri (%30), 1 aylık getiri (%25), pozitif gün oranı (%20), düşük drawdown (%15) ve "
+                      "AUM/likidite (%10). Yıllıklandırılmış getiri/Sharpe bu yaşta gürültülü veya hesaplanamaz "
+                      "olduğundan kullanılmaz.", styles["BodySm"]),
+            _make_table(no_headers, no_rows, no_cw, styles, align_right_from=4),
+            Spacer(1, 2 * mm),
+            Paragraph("* Tüm yeni fonlar 1 yıldan kısa fiyat geçmişine sahiptir; metrikler kısa pencereden gelir ve "
+                      "gürültülüdür. Kuruluş tarihi, fonun verideki ilk fiyat gününe dayanan bir yaklaşımdır. Kısa "
+                      "geçmiş, kalıcı performansın kanıtı değildir — bu bölüm bir izleme listesidir, öneri değildir.",
+                      styles["Disclaimer"])]
+        new_growth = _chart_growth_history(combined, top_new["Fon Kodu"].astype(str).tolist()[:5],
+                                           chart_dir / "new_opportunities.png",
+                                           benchmark=universe_bench,
+                                           title="Yeni Fırsat Fonlarının Kümülatif Büyümesi (ortak dönem)")
+        if new_growth:
+            story += [Spacer(1, 3 * mm), Image(new_growth, width=226 * mm, height=106 * mm)]
+        story.append(PageBreak())
+
     # 7. Önerilen portföy
     story.append(Paragraph("ÖNERİLEN ÇEŞİTLENDİRİLMİŞ PORTFÖY", styles["Section"]))
     portfolio = _build_portfolio(elig)
@@ -1129,6 +1220,10 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
                 f"→ <b>kazanç</b> %{risk['diversification_gain']:.1f}<br/>"
                 f"<b>Ort. ikili korelasyon:</b> {risk['avg_correlation']:.2f} "
                 f"({risk['n_used']} fon)<br/>"
+                f"<b>Kovaryans penceresi:</b> en az {risk['effective_days']} ortak gün · "
+                f"büzülme δ={risk['shrinkage']:.2f}"
+                + (f" · veri yetersiz: {', '.join(risk['dropped_codes'])}" if risk['dropped_codes'] else "")
+                + "<br/>"
                 f"<b>Fon/tema sayısı:</b> {len(portfolio)} / {len({p['Tema'] for p in portfolio})}")
         else:
             risk_txt = (
@@ -1225,19 +1320,36 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
          f"güvenilirlik ağırlığı w = pencere günü / {config.RETURN_FULL_CREDIBILITY_DAYS} (en çok 1) ile fonun kendi getirisi ve akran "
          f"(tema, en az {config.THEME_MIN_FUNDS} fon; yoksa evren) medyanının bileşimine çekilir. {config.RETURN_FULL_CREDIBILITY_DAYS}+ "
          "gün geçmişi olan fonlarda düzeltme sıfırdır. Tablolarda gösterilen getiriler HAM değerlerdir; düzeltme yalnızca skor girdisidir."),
-        ("Akran (Tema) Kıyası", "Harici bir endeks kullanılmaz; benchmark veri-seti içidir. Her fon, adından türetilen temasına atanır ve "
+        ("Benchmark (Endeks) Metrikleri", "Beta, Jensen Alpha, Tracking Error ve Information Ratio YALNIZCA gerçek bir dış endeks "
+         "serisi mevcutsa hesaplanır (<b>Dataset/benchmarks/</b>: XU100, gram altın, USD/TRY vb.; tema → benchmark eşlemesi "
+         "benchmarks.py'dedir). Vekil benchmark (fon ortalaması) kullanılmaz — CAPM/aktif-getiri yorumunu geçersiz kılar. Bu metrikler "
+         "bilgilendirme amaçlıdır; skor bileşimine dahil edilmez."),
+        ("Akran (Tema) Kıyası", "Skorlamada harici endeks kullanılmaz; akran kıyası veri-seti içidir. Her fon, adından türetilen temasına atanır ve "
          f"temasındaki (≥ {config.THEME_MIN_FUNDS} fon) getiri yüzdeliği <b>tema-içi skor</b> olarak hesaplanır. Büyüme grafiklerindeki "
          "kesikli gri çizgi evren/tema medyan patikasıdır (günlük medyan getiriden bileşiklenir)."),
         ("Sıralama vs. Seçim", "Skorlar tüm (veri-kalitesi geçerli) evren üzerinden hesaplanır; AUM / yaş kriterleri sıralamayı bozmadan "
          "bir <b>uygunluk</b> filtresi olarak uygulanır. Risksiz faiz artık eleme kriteri DEĞİLDİR: rf üzeri getiri sağlayan fonlar "
          "tablolarda <b>rf+</b> bayrağıyla işaretlenir. Öneri tabloları yalnızca uygun fonları listeler; risk-getiri haritası bağlam "
          "için tüm evreni gösterir."),
+        ("Yeni Fırsatlar Taraması", "Verideki ilk fiyat günü (kuruluş tarihi vekili) rapor tarihinden 2–6 ay önce olan genç fonlar "
+         "ayrı bir bölümde taranır. Fırsat Skoru bu kohortun KENDİ İÇİNDEKİ yüzdelik sıralardan hesaplanır: 3A getiri (%30), "
+         "1A getiri (%25), pozitif gün oranı (%20), düşük drawdown (%15), AUM (%10). Yıllıklandırılmış getiri/Sharpe bu yaşta "
+         "hesaplanamaz veya aşırı gürültülü olduğundan kullanılmaz. Veri setinin başlangıcına yapışık seriler (fon aslında daha "
+         "yaşlı olabilir) elenir. Bölüm bir izleme listesidir; kısa geçmiş nedeniyle bu fonlar ana öneri listelerine dahil edilmez."),
         ("Risk-Ayarlı Metrikler & Winsorizasyon", "Sharpe = (Getiri − Rf) / Volatilite; Sortino aşağı yönlü sapmayı; Calmar maksimum "
          f"drawdown'u esas alır. Volatilite ve Sortino, ±%{config.DAILY_RETURN_CLIP:.0f} winsorize edilmiş günlük getirilerle hesaplanır "
          "(ikinci moment tahminini veri hatalarına karşı stabilize eder); Max Drawdown, VaR/CVaR, çarpıklık ve en iyi/kötü gün ise "
          "HAM getirilerle hesaplanır — kuyruk metrikleri gerçek kuyrukları görmelidir. Bu ayrım bilinçli bir tasarımdır."),
         ("Portföy Riski", "Örnek portföyün volatilitesi fonların gerçek günlük getiri kovaryansından σ = √(w'·Σ·w) ile hesaplanır. "
+         "Kovaryans <b>ikili (pairwise)</b> tahmin edilir (her fon çifti kendi ortak gözlemlerini kullanır; tek bir kısa geçmişli fon "
+         "tüm matrisin penceresini kırpmaz) ve küçük örneklem hatasına karşı sabit-korelasyon hedefine <b>büzülür</b> (Ledoit-Wolf tarzı; "
+         "δ raporda gösterilir). En kısa ikili tahmin penceresi 'kovaryans penceresi' olarak raporlanır. "
          "Risk katkısı RC_i = w_i·(Σw)_i / (w'·Σ·w) her fonun riske gerçek payını, sualtı eğrisi ise tarihsel drawdown'u gösterir."),
+        ("Risksiz Faiz (Rf) Varsayımı", f"Rf = %{risk_free_rate:.1f} — <b>tefas.config.json</b> dosyasından okunur ve gözlemlenebilir bir "
+         "TL para-piyasası getirisini (mevduat/TLREF benzeri) yansıtacak şekilde kullanıcı tarafından belirlenmelidir. Sharpe, Sortino, "
+         "Calmar ve 'Fazla Getiri'de aşım eşiği olarak kullanılır; Sortino'daki günlük eşik yıllık oranın <b>geometrik</b> günlük "
+         "eşdeğeridir ((1+rf)^(1/252)−1). Rf, politika faizinin belirgin üzerinde seçilirse fonların çoğunun aşım getirisi negatife "
+         "döner ve oran-tabanlı metrikler 'en az kötü'yü sıralar; bu durumda mutlak getiri/volatilite eksenleri daha bilgilendiricidir."),
         ("Veri Kalitesi", f"Tek günde > %{config.DATA_QUALITY_MAX_DAILY_MOVE:.0f} fiyat hareketi yapan fonlar şüpheli kabul edilip analizden çıkarılır."),
         ("Reel Getiri & Vergi", f"Reel getiri Fisher denklemiyle enflasyondan (%{mac.inflation_rate:.0f} TÜFE) arındırılır. "
          "<b>Net getiri yalnızca yönetim ücreti düşülerek</b> verilir; stopaj/işlem vergileri tutuş süresi ve fon tipine bağlı olduğundan "

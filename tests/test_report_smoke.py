@@ -49,6 +49,49 @@ def test_generate_report_smoke(tmp_path):
     assert out.exists() and out.stat().st_size > 50_000
 
 
+def _newops_frame():
+    """_new_opportunities için asgari sütunlu metrik tablosu."""
+    return pd.DataFrame({
+        "Fon Kodu": ["ESKI", "GENC", "COKGENC", "KESIK", "IYI"],
+        "Fon Adi": ["ESKİ FON", "GENÇ FON", "ÇOK GENÇ FON", "KESİK FON", "İYİ FON"],
+        # veri 2025-01-01..2025-12-31; ref = 2025-12-31
+        "Fon_Kurulus_Tarihi": ["2025-03-01",   # 10 ay: çok eski
+                               "2025-09-01",   # 4 ay: kohortta
+                               "2025-12-10",   # <1 ay: çok genç
+                               "2025-01-01",   # veri başlangıcına yapışık: elenir
+                               "2025-08-15"],  # 4.5 ay: kohortta
+        "Veri_Noktasi_Sayisi": [250, 85, 15, 250, 95],
+        "Getiri_1A": [2.0, 1.0, 1.5, 2.0, 3.0],
+        "Getiri_3A": [6.0, 4.0, np.nan, 6.0, 9.0],
+        "Pozitif_Gun_Orani": [60.0, 55.0, 50.0, 60.0, 70.0],
+        "Max_Drawdown": [5.0, 8.0, 2.0, 5.0, 3.0],
+        "Fon_Toplam_Deger_Milyon_TL": [500.0, 50.0, 10.0, 500.0, 200.0],
+    })
+
+
+def test_new_opportunities_cohort_selection():
+    combined = pd.DataFrame({"Tarih": pd.date_range("2025-01-01", "2025-12-31", freq="B")})
+    out = report._new_opportunities(_newops_frame(), combined)
+    # yalnızca 2–6 ay yaşındakiler; kesik geçmiş ve çok genç/eski fonlar elenir
+    assert set(out["Fon Kodu"]) == {"GENC", "IYI"}
+    # tüm eksenlerde daha iyi olan fon önde
+    assert out.iloc[0]["Fon Kodu"] == "IYI"
+    assert "Firsat_Skoru" in out.columns and "Yas_Ay" in out.columns
+    assert out["Firsat_Skoru"].between(0, 100).all()
+
+
+def test_new_opportunities_empty_and_missing_column():
+    combined = pd.DataFrame({"Tarih": pd.date_range("2025-01-01", "2025-12-31", freq="B")})
+    # sütun yoksa boş döner, patlamaz
+    assert report._new_opportunities(pd.DataFrame({"Fon Kodu": ["A"]}), combined).empty
+    # veri seti fonun geçmişini kesiyorsa (ilk fiyat = veri başlangıcı) fon
+    # yaş penceresine düşse bile elenir — aslında daha yaşlı olabilir
+    short = pd.DataFrame({"Tarih": pd.date_range("2025-09-01", "2025-12-31", freq="B")})
+    df = _newops_frame()
+    df["Fon_Kurulus_Tarihi"] = "2025-09-01"   # ref'e göre 4 ay ama veri başlangıcına yapışık
+    assert report._new_opportunities(df, short).empty
+
+
 def test_chart_helpers_graceful_none(tmp_path):
     assert report._chart_monthly_heatmap(None, ["AAA"], tmp_path / "a.png") is None
     assert report._chart_monthly_heatmap(pd.DataFrame(columns=["Fon Kodu", "Tarih", "Fiyat"]),
