@@ -32,7 +32,24 @@ Tarih,Deger
 Para Piyasası / Borçlanma gibi temalara piyasa betası anlamlı atfedilemediği
 için eşleme yoktur; gerekirse `THEME_BENCHMARK`'a satır ekleyin.
 
-## Veri kaynakları
+## Otomatik indirme (önerilen)
+
+`GetDataSet/download_benchmarks.py` bu klasörü TCMB EVDS API'sinden doldurur
+(xu100, altin, usdtry + mevduat faizinden sentezlenen `mevduat.csv` endeksi):
+
+```
+# bir kez: https://evds2.tcmb.gov.tr üye ol, profildən API anahtarını al
+set EVDS_API_KEY=...          # veya tefas.config.json'a "evds_api_key" ekle
+python GetDataSet/download_benchmarks.py            # son 24 ay
+python GetDataSet/download_benchmarks.py --update   # eksik günleri tamamla
+```
+
+`download_tefas.py --update` ile birlikte çalıştırmak iyi bir alışkanlıktır;
+seriler fon verisinden 7+ gün geri kalırsa `tefas run` bilgilendirici bir
+`[WARN]` basar (asla hata vermez). EVDS seri kodları script'in başındaki
+`SERIES` tablosundadır — kod değişirse yalnızca orası güncellenir.
+
+## Elle veri kaynakları (alternatif)
 
 - BIST 100 (XU100): Borsa İstanbul / TCMB EVDS / investing.com dışa aktarımı
 - Gram altın (TL) ve USD/TRY: TCMB EVDS (https://evds2.tcmb.gov.tr) günlük seriler
