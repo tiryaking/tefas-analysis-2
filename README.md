@@ -36,10 +36,48 @@ tefas etl     --fund-type YAT                        # yalnızca ETL  -> combine
 tefas metrics --fund-type YAT --risk-free-rate 45   # combined.parquet'ten
 tefas score   --fund-type YAT --risk-free-rate 45   # metrics+combined parquet'ten
 tefas report  --fund-type YAT --risk-free-rate 45   # skorlu+metrik parquet'ten
+tefas holdings show|returns|check                    # kişisel portföy takibi (aşağıda)
+tefas dashboard                                      # interaktif web paneli (aşağıda)
 ```
 
 `run` için ek bayraklar: `--filter`, `--exclude`, `--no-active-only`,
 `--keep-suspect`, `--min-aum`, `--min-fund-age`, `--no-report`.
+
+## Kişisel portföy takibi (`tefas holdings`)
+
+Gerçek işlemlerini kök dizindeki `portfolio_transactions.csv`'ye gir (şablon:
+`portfolio_transactions.example.csv`; dosya gitignore'dadır — kişisel veridir):
+
+```csv
+Tarih,Fon Kodu,Islem,Adet,Fiyat,Not
+2025-03-10,PRY,ALIS,1250.5,4.8210,ilk alım
+2025-06-02,PRY,SATIS,400,5.9105,
+```
+
+```bash
+tefas holdings show     # FIFO pozisyonlar, maliyet, açık/realize K-Z, ağırlıklar
+tefas holdings returns  # XIRR (para-ağırlıklı, manşet) + TWR (fon kıyası için)
+tefas holdings check    # model portföy sapması, kendi kendini finanse eden
+                        # rebalans önerileri, kovaryans risk özeti, skor sinyalleri
+```
+
+Sinyaller (`check`), her `tefas run`'da `Output/score_history_*.parquet`'e
+birikir: skor persentili ~30 günde ≥10 puan düşen ya da üst çeyrekten çıkan
+pozisyonlar işaretlenir (2+ tarih birikince aktifleşir).
+
+## İnteraktif web paneli (`tefas dashboard`)
+
+```bash
+.venv/Scripts/python -m pip install -e ".[dashboard]"   # streamlit + plotly (bir kez)
+tefas dashboard                                          # http://localhost:8501
+```
+
+Sayfalar: **Genel Bakış** (KPI + ilk 10), **Fon Keşif** (tema/skor/AUM
+filtreleri + risk-getiri haritası), **Fon Detay** (büyüme, drawdown, yuvarlanan
+metrikler — PDF ile aynı `charts.prep_*` verisi), **Portföyüm** (işlem defteri
+editörü, K/Z, XIRR/TWR, değer grafiği), **Denge & Sinyal** (model sapması,
+rebalans, risk katkıları, sinyaller). Panel yalnızca `Output/*.parquet` okur;
+pipeline'dan tamamen bağımsızdır ve CLI ile aynı işlem defterini kullanır.
 
 ## Veri güncelleme (GetDataSet)
 

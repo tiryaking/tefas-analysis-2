@@ -18,8 +18,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
 # GetDataSet/fetch_platform_status.py için (TEFAS WAF aşma). download_tefas.py
-# saf stdlib olduğundan ek bağımlılık gerektirmez.
+# ve download_benchmarks.py saf stdlib olduğundan ek bağımlılık gerektirmez.
 fetch = ["cloudscraper>=1.2"]
+# `tefas dashboard` — interaktif yerel web paneli (çekirdek pipeline bunlarsız
+# aynen çalışır; dashboard yalnızca Output/*.parquet okuyucusudur).
+dashboard = ["streamlit>=1.35", "plotly>=5.20"]
 
 [project.scripts]
 tefas = "tefas.cli:main"
