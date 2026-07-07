@@ -1,13 +1,14 @@
 """
-Örnek portföy kurulumunun (report._build_portfolio) ve beklenen getiri/vol
-hesabının (_portfolio_expected) birim testleri — çekirdek öneri mantığı
+Örnek portföy kurulumunun (allocation.build_portfolio) ve beklenen getiri/vol
+hesabının (portfolio_expected) birim testleri — çekirdek öneri mantığı
 daha önce yalnızca PDF smoke testiyle dolaylı sınanıyordu.
 """
 import numpy as np
 import pandas as pd
 import pytest
 
-from tefas.report import _build_portfolio, _portfolio_expected
+from tefas.allocation import (build_portfolio as _build_portfolio,
+                              portfolio_expected as _portfolio_expected)
 
 # Tema anahtar kelimeleri themes.THEMES'ten: her ad farklı temaya düşer.
 _NAMES = {
