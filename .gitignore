@@ -12,6 +12,9 @@ Reports/
 Dataset/**/*.csv
 Dataset/platform_status/
 
+# Personal data (template: portfolio_transactions.example.csv)
+portfolio_transactions.csv
+
 # IDE
 .vscode/
 .idea/

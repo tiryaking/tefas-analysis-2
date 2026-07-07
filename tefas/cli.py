@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 
-from . import config, etl, metrics, scoring, report, pipeline
+from . import config, etl, holdings, metrics, scoring, report, pipeline
 from .io_utils import setup_utf8
 
 
@@ -173,6 +173,8 @@ def _interactive() -> int:
         [
             ("run", "Tüm pipeline (ETL -> metrik -> skor -> rapor)"),
             ("compare", "Fon karşılaştırma (belirli kodları yan yana)"),
+            ("holdings", "Portföyüm (pozisyonlar + XIRR/TWR getiri)"),
+            ("dashboard", "İnteraktif web paneli (tarayıcıda açılır)"),
             ("etl", "Yalnızca ETL (combined parquet)"),
             ("metrics", "Yalnızca metrik hesabı"),
             ("score", "Yalnızca skorlama"),
@@ -181,11 +183,26 @@ def _interactive() -> int:
         default="run",
     )
 
+    if cmd == "dashboard":
+        print("\n>>> Çalıştırılıyor: tefas dashboard\n")
+        return main(["dashboard"])
+
     fund_type = _ask_choice(
         "Hangi fon tipi?",
         [("YAT", "Yatırım fonları (YAT)"), ("EMK", "Emeklilik fonları (EMK)")],
         default="YAT",
     )
+
+    if cmd == "holdings":
+        action = _ask_choice(
+            "Ne gösterelim?",
+            [("show", "Pozisyonlar ve kar/zarar"), ("returns", "Getiri (XIRR + TWR)"),
+             ("check", "Denge kontrolü (model sapması + sinyaller)")],
+            default="show",
+        )
+        argv = ["holdings", action, "--fund-type", fund_type]
+        print("\n>>> Çalıştırılıyor: tefas " + " ".join(argv) + "\n")
+        return main(argv)
 
     argv = [cmd, "--fund-type", fund_type]
 
@@ -248,6 +265,149 @@ def _interactive() -> int:
 
     print("\n>>> Çalıştırılıyor: tefas " + " ".join(argv) + "\n")
     return main(argv)
+
+
+def _fmt_tl(v) -> str:
+    """1234567.89 -> '1.234.568 TL' (Türkçe binlik ayraç, tam sayıya yuvarlı)."""
+    try:
+        return f"{float(v):,.0f}".replace(",", ".") + " TL"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _run_holdings(args) -> int:
+    """`tefas holdings show|returns` — kişisel portföy pozisyonları ve getirisi."""
+    from pathlib import Path
+    fund_type = (args.fund_type or "YAT").upper()
+    paths = config.paths_for(fund_type)
+    txn_path = Path(args.file) if args.file else config.DEFAULT_TRANSACTIONS_PATH
+
+    try:
+        txns = holdings.load_transactions(txn_path)
+    except (FileNotFoundError, ValueError) as e:
+        raise SystemExit(f"[HATA] {e}")
+    combined = pipeline._read_parquet(paths.combined_parquet)
+    as_of = combined["Tarih"].max()
+
+    pos = holdings.positions(txns)
+    val = holdings.valuation(pos, combined)
+    open_pos = val[val["Adet"] > 0]
+    total_value = float(open_pos["Deger"].sum())
+    total_cost = float(open_pos["Maliyet"].sum())
+    realized = float(val["Realize_KZ"].sum())
+
+    print(f"\n{'='*64}\nPORTFÖYÜM — {paths.fund_name} | veri sonu: {as_of.date()} "
+          f"| {len(txns)} işlem\n{'='*64}")
+
+    if args.action == "show":
+        if open_pos.empty:
+            print("[INFO] Açık pozisyon yok.")
+        else:
+            cols = ["Fon Kodu", "Adet", "Ortalama_Maliyet", "Son_Fiyat", "Son_Tarih",
+                    "Deger", "Deger_KZ", "Getiri_Pct", "Agirlik", "Realize_KZ"]
+            show = open_pos[cols].copy()
+            show["Son_Tarih"] = show["Son_Tarih"].dt.date
+            show["Agirlik"] = (show["Agirlik"] * 100).round(1)
+            print(show.to_string(index=False))
+            stale = open_pos[open_pos["Veri_Bayat"]]
+            if not stale.empty:
+                print(f"\n[WARN] Bayat/eksik NAV (> {holdings.STALE_NAV_DAYS} gün): "
+                      f"{', '.join(stale['Fon Kodu'])} — değerleri güncel olmayabilir.")
+        closed = val[(val["Adet"] <= 0) & (val["Realize_KZ"] != 0)]
+        if not closed.empty:
+            print(f"\nKapanmış pozisyonlar (realize K/Z): "
+                  + ", ".join(f"{r['Fon Kodu']} {_fmt_tl(r['Realize_KZ'])}"
+                              for _, r in closed.iterrows()))
+        print(f"\nToplam değer : {_fmt_tl(total_value)}   (maliyet {_fmt_tl(total_cost)})")
+        print(f"Açık K/Z     : {_fmt_tl(total_value - total_cost)}   "
+              f"Realize K/Z: {_fmt_tl(realized)}")
+        return 0
+
+    if args.action == "returns":
+        flows = holdings.xirr_cashflows(txns, total_value, as_of)
+        mwr = holdings.xirr(flows)
+        t = holdings.twr(txns, combined)
+        print(f"Toplam değer          : {_fmt_tl(total_value)}")
+        print(f"XIRR (para-ağırlıklı) : " + (f"%{mwr*100:.1f} / yıl" if mwr == mwr else "hesaplanamadı"))
+        if t["twr"] == t["twr"]:
+            ann = f" (yıllık %{t['twr_yillik']*100:.1f})" if t["twr_yillik"] == t["twr_yillik"] else ""
+            print(f"TWR (zaman-ağırlıklı) : %{t['twr']*100:.1f} / {t['gun']} gün{ann}")
+        else:
+            print("TWR (zaman-ağırlıklı) : hesaplanamadı (yetersiz seri)")
+        print("\nNot: XIRR 'benim param ne kazandı' sorusunun; TWR fon/benchmark "
+              "kıyasının doğru ölçüsüdür.")
+        return 0
+
+    # check — model sapması, risk özeti, rebalans önerileri, sinyaller
+    import pandas as pd
+    from . import allocation, portfolio as pf_mod
+    scored = pipeline._read_parquet(paths.scored_parquet)
+    elig = scored[scored["Uygun"]].copy() if "Uygun" in scored.columns else scored.copy()
+    if elig.empty:
+        elig = scored.copy()
+    model = allocation.build_portfolio(elig)
+    if open_pos.empty or total_value <= 0:
+        raise SystemExit("[HATA] Açık pozisyon yok — kontrol edilecek portföy bulunamadı.")
+    current_weights = {str(r["Fon Kodu"]): float(r["Agirlik"]) * 100
+                       for _, r in open_pos.iterrows()}
+
+    # Gerçek portföyün kovaryans-temelli risk özeti
+    port = [{"Fon Kodu": c, "Agirlik": w} for c, w in current_weights.items()]
+    risk = pf_mod.portfolio_risk(combined, port)
+    if risk is not None:
+        print(f"Portföy volatilitesi (kovaryans) : %{risk['portfolio_vol']:.1f}")
+        print(f"Çeşitlendirme kazancı            : %{risk['diversification_gain']:.1f} "
+              f"(ort. korelasyon {risk['avg_correlation']:.2f}, {risk['n_used']} fon)")
+        rc = risk.get("risk_contributions") or {}
+        if rc:
+            print("Risk katkıları                   : "
+                  + ", ".join(f"{c} %{v*100:.0f}" for c, v in
+                              sorted(rc.items(), key=lambda kv: -kv[1])))
+    else:
+        print("[WARN] Kovaryans hesaplanamadı (yetersiz ortak veri).")
+
+    # Model sapması + rebalans önerileri
+    suggestions = allocation.rebalance(current_weights, model, total_value)
+    print(f"\nModel portföy ({len(model)} fon): "
+          + ", ".join(f"{p['Fon Kodu']} %{p['Agirlik']:.0f}" for p in model))
+    if not suggestions:
+        print("[OK] Portföy model dağılıma yeterince yakın — işlem önerisi yok "
+              "(eşik: 5 puan sapma).")
+    else:
+        print("\nÖnerilen işlemler (model dağılıma dönüş, kendi kendini finanse eder):")
+        for s in suggestions:
+            print(f"  {s['Islem']:<3} {s['Fon Kodu']:<5} "
+                  f"%{s['Mevcut_Pct']:.1f} → %{s['Hedef_Pct']:.1f} "
+                  f"({s['Fark_Puan']:+.1f} puan) ≈ {_fmt_tl(abs(s['Tutar_TL']))}")
+
+    # Sinyaller (skor geçmişinden)
+    history = pd.read_parquet(paths.score_history_parquet) \
+        if paths.score_history_parquet.exists() else None
+    sigs = holdings.signals(list(current_weights), scored, history)
+    if sigs:
+        print("\nSinyaller:")
+        for s in sigs:
+            print(f"  [{s['Tip']}] {s['Fon Kodu']}: {s['Mesaj']}")
+    else:
+        print("\nSinyal yok — pozisyonlar skor tablosunda ve trend stabil.")
+    print("\nNot: Model portföy kantitatif bir örnektir, yatırım tavsiyesi değildir.")
+    return 0
+
+
+def _run_dashboard(args) -> int:
+    """`tefas dashboard` — Streamlit panelini başlatır (opsiyonel bağımlılık)."""
+    import importlib.util
+    import subprocess
+    import sys
+    from pathlib import Path
+    if importlib.util.find_spec("streamlit") is None:
+        raise SystemExit("[HATA] streamlit kurulu değil. Kurulum:\n"
+                         "       pip install -e .[dashboard]")
+    app_path = Path(__file__).parent / "dashboard" / "app.py"
+    cmd = [sys.executable, "-m", "streamlit", "run", str(app_path),
+           "--server.port", str(args.port), "--server.headless", "false"]
+    print(f"[INFO] Dashboard başlatılıyor: http://localhost:{args.port} (durdurmak için Ctrl+C)")
+    return subprocess.run(cmd).returncode
 
 
 def _run_compare(args) -> int:
@@ -320,6 +480,17 @@ def main(argv=None) -> int:
                     help="İlk kat için gereken asgari geçmiş (takvim günü)")
     pb.add_argument("--no-active-only", action="store_true")
 
+    ph = sub.add_parser("holdings", help="Kişisel portföy: pozisyonlar ve getiri (işlem defterinden)")
+    ph.add_argument("action", choices=["show", "returns", "check"],
+                    help="show: pozisyon/K-Z tablosu; returns: XIRR + TWR; "
+                         "check: model sapması + rebalans önerisi + sinyaller")
+    ph.add_argument("--fund-type", default=None, choices=["YAT", "EMK"])
+    ph.add_argument("--file", default=None, metavar="PATH",
+                    help=f"İşlem defteri CSV (varsayılan: {config.DEFAULT_TRANSACTIONS_PATH.name})")
+
+    pd_ = sub.add_parser("dashboard", help="İnteraktif web paneli (Streamlit; pip install -e .[dashboard])")
+    pd_.add_argument("--port", type=int, default=8501)
+
     pc = sub.add_parser("compare", help="Belirli fonları karşılaştır (tablo + grafik PDF)")
     _common(pc)
     pc.add_argument("--codes", default=None,
@@ -332,6 +503,10 @@ def main(argv=None) -> int:
 
     if args.cmd == "compare":
         return _run_compare(args)
+    if args.cmd == "holdings":
+        return _run_holdings(args)
+    if args.cmd == "dashboard":
+        return _run_dashboard(args)
 
     # Config dosyası (yalnızca run destekler); CLI argümanları config'i ezer.
     cfg = _load_config(args.config) if getattr(args, "config", None) else {}

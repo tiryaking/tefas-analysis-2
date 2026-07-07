@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import benchmarks, config, etl, metrics, scoring, report, themes
+from . import benchmarks, config, etl, holdings, metrics, scoring, report, themes
 from .io_utils import setup_utf8
 
 
@@ -58,6 +58,14 @@ def run(fund_type: str = "YAT", risk_free_rate: float | None = None, *,
     bench_data = benchmarks.load_benchmarks()
     if bench_data:
         met = benchmarks.add_relative_metrics(met, combined, bench_data, risk_free_rate)
+        # Bayatlık kontrolü (bilgilendirici, asla fatal değil): benchmark serisi
+        # fon verisinden belirgin gerideyse Beta/Alpha güncel dönemi kaçırıyordur.
+        fund_max = pd.to_datetime(combined["Tarih"]).max()
+        bench_max = max(s.index.max() for s in bench_data.values())
+        lag = (fund_max - bench_max).days
+        if lag > 7:
+            print(f"[WARN] Benchmark serileri fon verisinden {lag} gün geride "
+                  f"(son: {bench_max.date()}). GetDataSet/download_benchmarks.py --update önerilir.")
     else:
         print("[INFO] Benchmark serisi yok (Dataset/benchmarks boş) — Beta/Alpha/TE/IR atlandı.")
 
@@ -70,6 +78,14 @@ def run(fund_type: str = "YAT", risk_free_rate: float | None = None, *,
     scored.to_parquet(paths.scored_parquet, index=False)
     scored.to_csv(paths.scored_csv, index=False, encoding=config.OUTPUT_ENCODING)
     print(f"[INFO] Skorlu metrikler: {len(scored)} fon -> {paths.scored_csv.name}")
+
+    # 3b) Skor geçmişi: her koşuda (veri-sonu tarihi, fon, skor) kaydı birikir —
+    # `tefas holdings check` sinyalleri (skor düşüşü vb.) bu geçmişi okur.
+    if not scored.empty:
+        snap = holdings.score_snapshot(scored, pd.to_datetime(combined["Tarih"]).max())
+        hist = holdings.append_score_history(snap, paths.score_history_parquet)
+        print(f"[INFO] Skor geçmişi: {hist['Tarih'].nunique()} tarih -> "
+              f"{paths.score_history_parquet.name}")
 
     # 4) Rapor
     if write_report:

@@ -33,6 +33,11 @@ DEFAULT_FILTER_PATH = PROJECT_ROOT / "filter_config.txt"
 # dosyası (satır başına bir kod; `#` yorum). `tefas compare` bunu okur.
 DEFAULT_COMPARISON_PATH = PROJECT_ROOT / "comparison_config.txt"
 
+# Kişisel portföy işlem defteri (ALIS/SATIS satırları; bkz. tefas/holdings.py).
+# Kişisel veri olduğu için gitignore'dadır; örnek şablon:
+# portfolio_transactions.example.csv
+DEFAULT_TRANSACTIONS_PATH = PROJECT_ROOT / "portfolio_transactions.csv"
+
 # ─── Analiz parametreleri ─────────────────────────────────────────────────────
 MIN_DATA_POINTS = 20
 TRADING_DAYS_PER_YEAR = 252
@@ -168,6 +173,7 @@ class Paths:
     scored_parquet: Path
     scored_csv: Path
     backtest_csv: Path
+    score_history_parquet: Path
     report_pdf: Path
     comparison_pdf: Path
 
@@ -188,6 +194,7 @@ def paths_for(fund_type: str) -> Paths:
         scored_parquet=OUTPUT_DIR / f"advanced_portfolio_recommendations_{suffix}.parquet",
         scored_csv=OUTPUT_DIR / f"advanced_portfolio_recommendations_{suffix}.csv",
         backtest_csv=OUTPUT_DIR / f"backtest_walkforward_{suffix}.csv",
+        score_history_parquet=OUTPUT_DIR / f"score_history_{suffix}.parquet",
         report_pdf=REPORTS_DIR / f"{CONSOLIDATED_REPORT_BASENAME}_{suffix}.pdf",
         comparison_pdf=REPORTS_DIR / f"{COMPARISON_REPORT_BASENAME}_{suffix}.pdf",
     )
