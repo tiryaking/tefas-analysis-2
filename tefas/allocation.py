@@ -18,17 +18,24 @@ from . import config, scoring
 from .themes import fund_theme
 
 
-def build_portfolio(df: pd.DataFrame) -> list[dict]:
+def build_portfolio(df: pd.DataFrame, *, theme_cap: int = 1,
+                    fill: bool = True) -> list[dict]:
     """Profil skorlarından örnek çok-profilli portföy kurar.
 
-    Tema çeşitliliği tercih edilir ama katı teklik olarak dayatılmaz: dar
-    (filtrelenmiş) evrenlerde boş profil slotları en iyi kalan fonlarla
-    doldurulur; bir temanın payı yumuşak tavanla (slotların ~%50'si) sınırlanır.
+    `theme_cap`: bir temadan portföye girebilecek azami fon sayısı.
+    Varsayılan 1 (katı tema tekliği) — walk-forward doğrulamasıyla seçildi
+    (2026-07-08, YAT/rf=65, 13 kat): cap=1 isabet %69 @1ay / %82 @3ay;
+    cap=2 → %62/%64; slotların %50'si (eski soft cap) → %46/%55. Tema
+    çeşitliliği sinyalin taşıyıcısı; tavan gevşedikçe monoton bozuluyor.
+
+    `fill=True` dar (filtrelenmiş) evrenlerde boş kalan profil slotlarını tema
+    kısıtına bakmadan en iyi kalan fonlarla doldurur — geniş evrende hiç
+    devreye girmez (backtest'te fill'li/fill'siz kat sonuçları birebir aynı),
+    dar evrende portföyün tek-iki fona çökmesini önler.
     """
     plan = [("Conservative", "Muhafazakâr", 2, 22.0), ("Balanced", "Dengeli", 2, 16.0),
             ("Moderate", "Orta", 1, 14.0), ("Aggressive", "Agresif", 1, 10.0)]
-    target_slots = sum(n_sel for score_key, _, n_sel, _ in plan if f"{score_key}_Score" in df.columns)
-    max_theme_count = max(1, int(np.ceil(target_slots * 0.50))) if target_slots else 1
+    max_theme_count = max(1, int(theme_cap))
     portfolio, used_codes, theme_counts = [], set(), {}
 
     def add_row(r, label, weight, score_col):
@@ -56,13 +63,14 @@ def build_portfolio(df: pd.DataFrame) -> list[dict]:
             add_row(r, label, weight, col)
             profile_themes.add(theme)
             picked += 1
-        for _, r in ranked.iterrows():
-            if picked >= n_sel:
-                break
-            if r["Fon Kodu"] in used_codes:
-                continue
-            add_row(r, label, weight, col)
-            picked += 1
+        if fill:
+            for _, r in ranked.iterrows():
+                if picked >= n_sel:
+                    break
+                if r["Fon Kodu"] in used_codes:
+                    continue
+                add_row(r, label, weight, col)
+                picked += 1
     total = sum(p["Agirlik"] for p in portfolio)
     if total > 0:
         for p in portfolio:

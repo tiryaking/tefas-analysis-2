@@ -721,9 +721,10 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
                 f"<b>Beklenen yıllık getiri (ağırlıklı):</b> %{exp_ret:.1f}<br/>"
                 f"<b>Tahmini portföy volatilitesi:</b> %{vol_lo:.1f} – %{vol_hi:.1f} (çeşitlendirme bandı)<br/>"
                 f"<b>Fon/tema sayısı:</b> {len(portfolio)} / {len({p['Tema'] for p in portfolio})}")
-        story.append(Paragraph("Farkli risk profillerinden secilen ve tema yogunlasmasi mumkun oldugunca sinirlanan "
-                               "ornek bir portfoy. Filtrelenmis evren az temaliysa bos profil slotlari en iyi kalan "
-                               "fonlarla doldurulur; portfoy volatilitesi fonlarin gercek gunluk getiri kovaryansindan "
+        story.append(Paragraph("Farkli risk profillerinden, her temadan en cok BIR fon secilen ornek bir portfoy "
+                               "(tema tekligi walk-forward dogrulamasiyla secildi: tavan gevsedikce isabet monoton "
+                               "dusuyor). Filtrelenmis evren az temaliysa bos profil slotlari en iyi kalan fonlarla "
+                               "doldurulur; portfoy volatilitesi fonlarin gercek gunluk getiri kovaryansindan "
                                "hesaplanir.", styles["BodySm"]))
         pie = _chart_allocation(portfolio, chart_dir / "allocation.png")
         ph = ["Kod", "Fon Adı", "Profil", "Tema", "Ağırlık", "Yıl. Get.", "Volat."]

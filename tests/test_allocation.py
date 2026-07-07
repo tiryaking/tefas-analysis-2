@@ -64,7 +64,11 @@ def test_build_portfolio_picks_top_scores_first():
 
 
 def test_build_portfolio_theme_dedup():
-    """Aynı temadaki iki yüksek skorlu fondan yalnızca biri seçilir."""
+    """Aynı temadaki iki yüksek skorlu fondan yalnızca biri seçilir.
+
+    Varsayılan theme_cap=1 (katı teklik): geniş evrende her tema en çok bir
+    kez — walk-forward'da en iyi isabeti veren kural (bkz. allocation.py).
+    """
     df = _scored_frame()
     df.loc[df["Fon Kodu"] == "BBB", "Fon Adi"] = "BBB HISSE FONU"  # AAA ile aynı tema
     df["Conservative_Score"] = [95, 94, 50, 40, 30, 20, 10, 5]
@@ -72,10 +76,13 @@ def test_build_portfolio_theme_dedup():
     cons_codes = [p["Fon Kodu"] for p in port if p["Profil"].startswith("Muhafazak")]
     assert cons_codes[0] == "AAA"
     assert "BBB" not in cons_codes                   # tema çakışması → atlandı
-    assert max(pd.Series([p["Tema"] for p in port]).value_counts()) <= 3
+    # 8 fon / 7 tema, 6 slot: geniş evrende temalar tekrarsız kalmalı
+    assert max(pd.Series([p["Tema"] for p in port]).value_counts()) == 1
 
 
 def test_build_portfolio_fills_narrow_theme_universe():
+    """Dar evren (yalnızca 2 tema): doldurma tema tavanını yok sayar ve
+    portföy 6 fona tamamlanır — tek-iki fona çökme yok."""
     codes = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG", "HHH"]
     df = _scored_frame(codes)
     df["Fon Adi"] = [
@@ -88,8 +95,23 @@ def test_build_portfolio_fills_narrow_theme_universe():
         df[col] = np.linspace(100, 10, len(df))
     port = _build_portfolio(df)
     assert len(port) == 6
-    assert len({p["Tema"] for p in port}) == 2
-    assert max(pd.Series([p["Tema"] for p in port]).value_counts()) <= 3
+    assert len({p["Tema"] for p in port}) == 2       # iki tema da temsil edilir
+    assert sum(p["Agirlik"] for p in port) == pytest.approx(100.0)
+    codes_ = [p["Fon Kodu"] for p in port]
+    assert len(codes_) == len(set(codes_))           # fon tekrarı asla olmaz
+
+
+def test_build_portfolio_fill_disabled_leaves_slots_empty():
+    """fill=False (eski katı davranış): dar evrende slotlar boş kalır ama
+    ağırlıklar yine 100'e ölçeklenir."""
+    codes = ["AAA", "BBB", "CCC", "DDD"]
+    df = _scored_frame(codes)
+    df["Fon Adi"] = ["AAA HISSE SENEDI FONU", "BBB HISSE SENEDI FONU",
+                     "CCC KATILIM FONU", "DDD KATILIM FONU"]
+    for col in ["Conservative_Score", "Balanced_Score", "Moderate_Score", "Aggressive_Score"]:
+        df[col] = np.linspace(100, 10, len(df))
+    port = _build_portfolio(df, fill=False)
+    assert len(port) == 2                            # 2 tema → 2 fon, dolgu yok
     assert sum(p["Agirlik"] for p in port) == pytest.approx(100.0)
 
 
