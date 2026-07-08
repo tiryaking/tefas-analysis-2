@@ -113,7 +113,7 @@ def run_backtest(combined: pd.DataFrame, risk_free_rate: float, *,
         if scored is None or scored.empty:
             continue
         elig = scored[scored["Uygun"]] if "Uygun" in scored.columns else scored
-        portfolio = _build_portfolio(elig)
+        portfolio = _build_portfolio(elig, exclude_young=False)
         if not portfolio:
             continue
         weights = {p["Fon Kodu"]: p["Agirlik"] / 100.0 for p in portfolio}

@@ -18,8 +18,101 @@ from . import config, scoring
 from .themes import fund_theme
 
 
+PROFILE_PLAN = [
+    ("Conservative", "Muhafazakâr", 2, 22.0),
+    ("Balanced", "Dengeli", 2, 16.0),
+    ("Moderate", "Orta", 1, 14.0),
+    ("Aggressive", "Agresif", 1, 10.0),
+]
+
+
+def add_decision_flags(df: pd.DataFrame) -> pd.DataFrame:
+    """Skoru değiştirmeden öneri kararında kullanılan açıklayıcı bayrakları ekler.
+
+    AUM burada getiri skoru değildir; likidite/ölçek sinyali olarak etiketlenir.
+    Kısa geçmişli fonlar ana öneriye sokulmaz, izleme listesi adayı olur. Rf altı
+    düşük oynaklıklı fonlar ayrıca işaretlenir: bu fonlar düşük riskli görünse de
+    nakit/rf alternatifinin altında kalmış olabilir.
+    """
+    out = df.copy()
+    idx = out.index
+    data_points = pd.to_numeric(out.get("Veri_Noktasi_Sayisi"), errors="coerce") \
+        if "Veri_Noktasi_Sayisi" in out.columns else pd.Series(np.nan, index=idx)
+    age = pd.to_numeric(out.get("Fon_Yasi_Yil"), errors="coerce") \
+        if "Fon_Yasi_Yil" in out.columns else pd.Series(np.nan, index=idx)
+    aum = pd.to_numeric(out.get("Fon_Toplam_Deger_Milyon_TL"), errors="coerce") \
+        if "Fon_Toplam_Deger_Milyon_TL" in out.columns else pd.Series(np.nan, index=idx)
+    vol = pd.to_numeric(out.get("Yillik_Volatilite"), errors="coerce") \
+        if "Yillik_Volatilite" in out.columns else pd.Series(np.nan, index=idx)
+    rf_ustu = out["Rf_Ustu"].fillna(False).astype(bool) if "Rf_Ustu" in out.columns \
+        else pd.Series(True, index=idx)
+
+    out["Kisa_Gecmis"] = (
+        (data_points.notna() & (data_points < config.TRADING_DAYS_PER_YEAR)) |
+        (age.notna() & (age < 1.0))
+    ).astype(bool)
+    out["Dusuk_AUM"] = (aum.notna() & (aum < config.AUM_BONUS_THRESHOLD)).astype(bool)
+    out["Likidite_Sinyali"] = np.select(
+        [aum.isna(), out["Dusuk_AUM"]],
+        ["bilinmiyor", "dusuk_aum"],
+        default="olcek_yeterli",
+    )
+
+    low_vol_cutoff = vol.quantile(0.25) if vol.notna().sum() >= 4 else vol.median()
+    out["Dusuk_Vol_Rf_Alti"] = (
+        vol.notna() & pd.notna(low_vol_cutoff) & (vol <= float(low_vol_cutoff)) & ~rf_ustu
+    ).astype(bool)
+
+    eligible = out["Uygun"].fillna(True).astype(bool) if "Uygun" in out.columns \
+        else pd.Series(True, index=idx)
+    out["Oneri_Uygun"] = (eligible & ~out["Kisa_Gecmis"]).astype(bool)
+    out["Izleme_Listesi_Adayi"] = (eligible & out["Kisa_Gecmis"]).astype(bool)
+
+    flags = []
+    for _, r in out.iterrows():
+        row_flags = []
+        if not bool(r.get("Oneri_Uygun")):
+            row_flags.append("uygunluk disi" if not bool(r.get("Izleme_Listesi_Adayi")) else "kisa gecmis")
+        if bool(r.get("Dusuk_AUM")):
+            row_flags.append("dusuk AUM")
+        if bool(r.get("Dusuk_Vol_Rf_Alti")):
+            row_flags.append("dusuk oynaklik ama rf alti")
+        if "Reel_Getiri_1Y" in out.columns and pd.notna(r.get("Reel_Getiri_1Y")):
+            row_flags.append("reel pozitif" if float(r["Reel_Getiri_1Y"]) > 0 else "reel negatif")
+        if "Rf_Ustu" in out.columns:
+            row_flags.append("rf ustu" if bool(r.get("Rf_Ustu")) else "rf alti")
+        flags.append("; ".join(row_flags) if row_flags else "temiz")
+    out["Karar_Bayraklari"] = flags
+    return out
+
+
+def eligible_universe(df: pd.DataFrame) -> pd.DataFrame:
+    """Ana öneriye girebilecek fon evreni: uygunluk + yeterli geçmiş."""
+    flagged = add_decision_flags(df)
+    return flagged[flagged["Oneri_Uygun"]].copy()
+
+
+def watchlist_universe(df: pd.DataFrame) -> pd.DataFrame:
+    """Kısa geçmiş nedeniyle ana öneri dışı kalan, izlenecek genç fonlar."""
+    flagged = add_decision_flags(df)
+    score_col = "Overall_Score" if "Overall_Score" in flagged.columns else None
+    out = flagged[flagged["Izleme_Listesi_Adayi"]].copy()
+    if score_col and score_col in out.columns:
+        out = out.sort_values(score_col, ascending=False)
+    return out
+
+
+def profile_ranked(df: pd.DataFrame, profile: str) -> pd.DataFrame:
+    """Bir risk profili için önerilebilir evreni profil skoruna göre sıralar."""
+    col = f"{profile}_Score"
+    universe = eligible_universe(df)
+    if col not in universe.columns:
+        return universe.iloc[0:0].copy()
+    return universe.sort_values(col, ascending=False)
+
+
 def build_portfolio(df: pd.DataFrame, *, theme_cap: int = 1,
-                    fill: bool = True) -> list[dict]:
+                    fill: bool = True, exclude_young: bool = True) -> list[dict]:
     """Profil skorlarından örnek çok-profilli portföy kurar.
 
     `theme_cap`: bir temadan portföye girebilecek azami fon sayısı.
@@ -32,9 +125,12 @@ def build_portfolio(df: pd.DataFrame, *, theme_cap: int = 1,
     kısıtına bakmadan en iyi kalan fonlarla doldurur — geniş evrende hiç
     devreye girmez (backtest'te fill'li/fill'siz kat sonuçları birebir aynı),
     dar evrende portföyün tek-iki fona çökmesini önler.
+
+    `exclude_young=True` ana öneride 1 yıldan kısa geçmişli fonları dışarıda
+    tutar. Walk-forward testleri erken katları ölçebilmek için bunu kapatabilir;
+    ürün raporu/dashboard varsayılan olarak genç fonları izleme listesine ayırır.
     """
-    plan = [("Conservative", "Muhafazakâr", 2, 22.0), ("Balanced", "Dengeli", 2, 16.0),
-            ("Moderate", "Orta", 1, 14.0), ("Aggressive", "Agresif", 1, 10.0)]
+    df = add_decision_flags(df)
     max_theme_count = max(1, int(theme_cap))
     portfolio, used_codes, theme_counts = [], set(), {}
 
@@ -44,15 +140,23 @@ def build_portfolio(df: pd.DataFrame, *, theme_cap: int = 1,
                           "Tema": theme, "Agirlik": weight, "Secim_Skoru": r.get(score_col),
                           "Yillik_Getiri": r.get("Yillik_Getiri"),
                           "Yillik_Volatilite": r.get("Yillik_Volatilite"),
-                          "Sharpe_Orani": r.get("Sharpe_Orani")})
+                          "Sharpe_Orani": r.get("Sharpe_Orani"),
+                          "Rf_Ustu": r.get("Rf_Ustu"),
+                          "Reel_Getiri_1Y": r.get("Reel_Getiri_1Y"),
+                          "Karar_Bayraklari": r.get("Karar_Bayraklari"),
+                          "Likidite_Sinyali": r.get("Likidite_Sinyali")})
         used_codes.add(code)
         theme_counts[theme] = theme_counts.get(theme, 0) + 1
-    for score_key, label, n_sel, weight in plan:
+    for score_key, label, n_sel, weight in PROFILE_PLAN:
         col = f"{score_key}_Score"
         if col not in df.columns:
             continue
         picked = 0
-        ranked = df.sort_values(col, ascending=False)
+        elig_mask = df["Oneri_Uygun"] if exclude_young else (
+            df["Uygun"].fillna(True).astype(bool) if "Uygun" in df.columns
+            else pd.Series(True, index=df.index)
+        )
+        ranked = df[elig_mask].sort_values(col, ascending=False)
         profile_themes = set()
         for _, r in ranked.iterrows():
             if picked >= n_sel:

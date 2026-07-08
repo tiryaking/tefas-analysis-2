@@ -8,7 +8,10 @@ import pandas as pd
 import pytest
 
 from tefas.allocation import (build_portfolio as _build_portfolio,
-                              portfolio_expected as _portfolio_expected)
+                              portfolio_expected as _portfolio_expected,
+                              profile_ranked as _profile_ranked,
+                              watchlist_universe as _watchlist_universe,
+                              add_decision_flags as _add_decision_flags)
 
 # Tema anahtar kelimeleri themes.THEMES'ten: her ad farklı temaya düşer.
 _NAMES = {
@@ -125,6 +128,54 @@ def test_build_portfolio_missing_profile_renormalizes():
 
 def test_build_portfolio_empty():
     assert _build_portfolio(_scored_frame().iloc[0:0]) == []
+
+
+def test_profile_ranked_uses_profile_score_order():
+    df = _scored_frame()
+    df["Uygun"] = True
+    df["Veri_Noktasi_Sayisi"] = 300
+    df["Balanced_Score"] = [10, 80, 70, 20, 90, 30, 40, 50]
+    ranked = _profile_ranked(df, "Balanced")
+    assert ranked["Fon Kodu"].tolist()[:3] == ["EEE", "BBB", "CCC"]
+
+
+def test_ineligible_fund_does_not_enter_recommendation():
+    df = _scored_frame()
+    df["Uygun"] = True
+    df["Veri_Noktasi_Sayisi"] = 300
+    df.loc[df["Fon Kodu"] == "AAA", "Uygun"] = False
+    df["Conservative_Score"] = [100, 90, 10, 10, 10, 10, 10, 10]
+    port = _build_portfolio(df)
+    assert "AAA" not in [p["Fon Kodu"] for p in port]
+
+
+def test_young_fund_goes_to_watchlist_not_main_portfolio():
+    df = _scored_frame()
+    df["Uygun"] = True
+    df["Veri_Noktasi_Sayisi"] = 300
+    df.loc[df["Fon Kodu"] == "AAA", "Veri_Noktasi_Sayisi"] = 80
+    df["Overall_Score"] = [100, 10, 10, 10, 10, 10, 10, 10]
+    df["Conservative_Score"] = [100, 90, 10, 10, 10, 10, 10, 10]
+
+    port = _build_portfolio(df)
+    watch = _watchlist_universe(df)
+
+    assert "AAA" not in [p["Fon Kodu"] for p in port]
+    assert watch["Fon Kodu"].tolist() == ["AAA"]
+    assert bool(watch.iloc[0]["Izleme_Listesi_Adayi"])
+
+
+def test_low_volatility_rf_under_flag_is_explicit():
+    df = _scored_frame()
+    df["Uygun"] = True
+    df["Veri_Noktasi_Sayisi"] = 300
+    df["Rf_Ustu"] = [False, True, True, True, True, True, True, True]
+    df["Yillik_Volatilite"] = [2, 9, 12, 15, 18, 21, 24, 27]
+
+    flagged = _add_decision_flags(df).set_index("Fon Kodu")
+
+    assert bool(flagged.loc["AAA", "Dusuk_Vol_Rf_Alti"])
+    assert "dusuk oynaklik ama rf alti" in flagged.loc["AAA", "Karar_Bayraklari"]
 
 
 def test_portfolio_expected_golden():
