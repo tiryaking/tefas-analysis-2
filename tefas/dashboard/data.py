@@ -11,7 +11,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from tefas import config
+from tefas import config, validation
 
 FUND_TYPES = {"YAT": "Yatırım", "EMK": "Emeklilik"}
 
@@ -45,6 +45,10 @@ def load_combined(fund_type: str = "YAT") -> pd.DataFrame | None:
 
 def load_history(fund_type: str = "YAT") -> pd.DataFrame | None:
     return _load(config.paths_for(fund_type).score_history_parquet)
+
+
+def load_validation(fund_type: str = "YAT") -> validation.WalkForwardSummary:
+    return validation.summarize_walk_forward_csv(config.paths_for(fund_type).backtest_csv)
 
 
 def sidebar_fund_type() -> str:

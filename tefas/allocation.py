@@ -271,20 +271,5 @@ def new_opportunities(df: pd.DataFrame, combined: pd.DataFrame | None,
 
 def backtest_summary_from_csv(path: Path) -> pd.DataFrame:
     """Walk-forward fold CSV'sinden raporlanabilir ozet uretir."""
-    if not path.exists():
-        return pd.DataFrame()
-    try:
-        folds = pd.read_csv(path, encoding=config.OUTPUT_ENCODING)
-    except Exception:  # noqa: BLE001
-        return pd.DataFrame()
-    required = {"Ufuk_Ay", "Portfoy_Getiri", "Evren_Ort", "Fark"}
-    if not required <= set(folds.columns) or folds.empty:
-        return pd.DataFrame()
-    return (folds.groupby("Ufuk_Ay")
-            .agg(Kat_Sayisi=("Fark", "size"),
-                 Portfoy_Ort=("Portfoy_Getiri", "mean"),
-                 Evren_Ort=("Evren_Ort", "mean"),
-                 Ort_Fark=("Fark", "mean"),
-                 Medyan_Fark=("Fark", "median"),
-                 Isabet_Orani=("Fark", lambda s: float((s > 0).mean())))
-            .round(4).reset_index())
+    from .validation import backtest_summary_from_csv as _summary
+    return _summary(path)

@@ -33,7 +33,7 @@ from reportlab.platypus.tableofcontents import TableOfContents
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-from . import allocation, config, portfolio as pf, themes
+from . import allocation, config, portfolio as pf, themes, validation
 from .themes import fund_theme  # geriye uyumluluk: report.fund_theme kullanılıyordu
 from .charts import (
     FUND_PALETTE,
@@ -66,6 +66,7 @@ _build_portfolio = allocation.build_portfolio
 _portfolio_expected = allocation.portfolio_expected
 _new_opportunities = allocation.new_opportunities
 _backtest_summary_from_csv = allocation.backtest_summary_from_csv
+_walk_forward_summary = validation.summarize_walk_forward_csv
 
 NAVY = colors.HexColor("#13294b")
 BLUE = colors.HexColor("#1f5fb0")
@@ -465,32 +466,44 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
     bench_bar = _chart_benchmark_bars(df, risk_free_rate, chart_dir / "bench_bar.png")
     if bench_bar:
         story.append(Image(bench_bar, width=232 * mm, height=45 * mm))
-    bt_sum = _backtest_summary_from_csv(paths.backtest_csv)
-    if not bt_sum.empty:
-        story.append(PageBreak())
+    bt_validation = _walk_forward_summary(paths.backtest_csv)
+    bt_sum = bt_validation.table
+    story.append(PageBreak())
+    story.append(Paragraph("MODEL DOGRULAMA - WALK-FORWARD", styles["Section"]))
+    if bt_validation.available:
+        has_turnover = "Turnover" in bt_sum.columns
         bt_headers = ["Ufuk", "Kat", "Portfoy Ort.", "Evren Ort.", "Ort. Fark",
-                      "Medyan Fark", "Isabet"]
+                      "Medyan Fark", "Isabet"] + (["Turnover"] if has_turnover else [])
         bt_rows = [[Paragraph(f"{int(r['Ufuk_Ay'])} ay", styles["CellB"]),
                     Paragraph(fmt(r["Kat_Sayisi"], 0), styles["Cell"]),
                     Paragraph(pct(r["Portfoy_Ort"]), styles["Cell"]),
                     Paragraph(pct(r["Evren_Ort"]), styles["Cell"]),
                     Paragraph(pct(r["Ort_Fark"]), styles["Cell"]),
                     Paragraph(pct(r["Medyan_Fark"]), styles["Cell"]),
-                    Paragraph(pct(r["Isabet_Orani"] * 100), styles["Cell"])]
+                    Paragraph(pct(r["Isabet_Orani"] * 100), styles["Cell"])] +
+                   ([Paragraph(pct(r["Turnover"] * 100), styles["Cell"])] if has_turnover else [])
                    for _, r in bt_sum.iterrows()]
+        widths = [18 * mm, 14 * mm, 25 * mm, 25 * mm, 24 * mm, 27 * mm, 20 * mm]
+        if has_turnover:
+            widths.append(20 * mm)
         story += [
-            Paragraph("MODEL DOGRULAMA - WALK-FORWARD", styles["Section"]),
             Paragraph("Bu tablo, onerilen skorlama ve portfoy kurma kuralinin her ay sonunda yalnizca "
                       "o tarihe kadar bilinen veriyle secim yaptiginda sonraki donemde evren ortalamasini "
                       "asip asmadigini gosterir. Kat sayisi sinirli oldugu icin istatistiksel kanit degil; "
                       "modelin ileriye donuk sinyal tasiyip tasimadigina dair disiplinli bir saglamadir.",
                       styles["BodySm"]),
-            _make_table(bt_headers, bt_rows,
-                        [18 * mm, 14 * mm, 25 * mm, 25 * mm, 24 * mm, 27 * mm, 20 * mm],
-                        styles, align_right_from=1),
+            _make_table(bt_headers, bt_rows, widths, styles, align_right_from=1),
             Spacer(1, 2 * mm),
             Paragraph(f"Kaynak: {paths.backtest_csv.name}. Skor/profil agirliklari degistirildiginde "
                       "bu backtest yeniden calistirilmali ve PDF bu ozetle guncellenmelidir.",
+                      styles["Disclaimer"]),
+        ]
+    else:
+        story += [
+            Paragraph(bt_validation.message, styles["Body"]),
+            Paragraph("Bu rapor, model kalitesi icin walk-forward CSV'si olmadan uretilmistir. "
+                      "`tefas backtest` calistirildiginda ayni bolum kat sayisi, 1A/3A/6A "
+                      "sonuclari, ortalama fark, medyan fark ve isabet oranini gosterecektir.",
                       styles["Disclaimer"]),
         ]
     story.append(PageBreak())
