@@ -326,3 +326,38 @@ v2.1 eklemeleri:
 
 **Uyarı:** Bu araç yatırım tavsiyesi vermez. Geçmiş performans gelecek getiriyi
 garanti etmez.
+
+## Güncel öneri akışı
+
+Bu sürümde ürün hedefi, yalnızca "en yüksek skorlu fon" listesi değil,
+**açıklanabilir, risk profiline uygun fon öneri sistemi**dir.
+
+- **Skorlama:** `tefas/scoring.py` ham metrikleri composite ve profil skorlarına
+  çevirir. Ağırlıklar ve model sürümü `tefas/model_config.py` altında
+  versiyonlanır; skor çıktısında `Model_Version` kolonu bulunur.
+- **Karar katmanı:** `tefas/allocation.py` skordan ayrı olarak uygunluk filtresi,
+  profil bazlı sıralama, portföy seçim kuralları ve karar bayraklarını üretir.
+  AUM bir getiri skoru değil, likidite/uygunluk sinyalidir.
+- **Genç fonlar:** 1 yıldan kısa fiyat geçmişli fonlar ana öneriye girmez;
+  izleme listesi adayı olarak etiketlenir.
+- **Risk/free-rate yorumu:** rf altındaki düşük oynaklıklı fonlar
+  "düşük oynaklık ama rf altı" bayrağıyla görünür hale gelir.
+
+## Validasyon, PDF ve Dashboard
+
+- **Walk-forward validasyon:** `Output/backtest_walkforward_*.csv` varsa PDF ve
+  dashboard aynı `tefas/validation.py` özetini kullanır: kat sayısı, 1A/3A/6A
+  sonuçları, ortalama fark, medyan fark, hit-rate ve varsa turnover.
+- **Backtest yoksa:** rapor ve dashboard bunu sessiz geçmez; "validasyon dosyası
+  bulunamadı" uyarısı verir.
+- **PDF karar raporu:** akış karar özeti, önerilen portföy, uyarı bayrakları,
+  model doğrulama, risk katkısı ve fon detayları etrafında düzenlenmiştir. Risk
+  katkısı ve korelasyon grafikleri okunabilir ayrı sayfalarda tutulur.
+- **Dashboard:** mevcut sayfalar korunur; `Karar Merkezi` sayfası portföy
+  önerisi, model doğrulama ve risk merkezi sekmelerini sunar.
+
+## Kapsam dışı veri entegrasyonu
+
+Bu çalışma yeni KAP/EVDS/harici veri entegrasyonu eklemez. Dashboard ve raporlar
+yalnızca mevcut `Dataset/`, `Output/*.parquet`, mevcut benchmark klasörü ve
+varsa mevcut backtest CSV çıktılarını kullanır.

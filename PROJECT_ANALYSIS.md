@@ -349,3 +349,19 @@ tefas dashboard
 - portfolio_transactions.csv kisisel veri icerer ve .gitignore'dadir.
 - TEFAS API token'i periyodik olarak yenilenmelidir (HTTP 401/403 hatasi alinirsa).
 - Benchmark serileri opsiyoneldir; yoksa Beta/Alpha/TE/IR metrikleri NaN kalir.
+
+## 14. Ust Seviye Oneri Mimarisi
+
+Bu calismadan sonra sistemin urun hedefi "aciklanabilir, risk profiline uygun fon oneri sistemi"dir. Skorlama ve karar katmani ayrilmistir:
+
+- `tefas/scoring.py`: composite/profil skorlarini uretir.
+- `tefas/model_config.py`: model surumu, skor agirliklari ve oneri ayarlari icin merkezi audit kaynagidir. Scored ciktilar `Model_Version` tasir.
+- `tefas/allocation.py`: uygunluk filtresi, profil bazli siralama, portfoy secim kurallari, izleme listesi ve karar bayraklarini uretir.
+- AUM karar skorunun kendisi degil, likidite/uygunluk sinyalidir.
+- 1 yildan kisa gecmisli fonlar ana oneriden ayrilir ve izleme listesi adayi olarak etiketlenir.
+
+Walk-forward validasyon `tefas/validation.py` uzerinden urunlestirilmistir. PDF ve dashboard ayni ozet fonksiyonunu kullanir; backtest CSV yoksa sessiz gecilmez, kontrollu uyari verilir. Ozet; kat sayisi, ufuk bazli sonuclar, ortalama fark, medyan fark, hit-rate ve varsa turnover bilgisini gosterir.
+
+PDF raporu karar akisi etrafinda guclendirildi: Karar Ozeti, Onerilen Portfoy, Uyari Bayraklari, Model Dogrulama, Risk Katkisi ve Fon Detaylari. Dashboard'da mevcut sayfalar korunurken `Karar Merkezi` eklendi.
+
+Kapsam disi: Bu turda yeni KAP/EVDS/harici veri entegrasyonu, veritabani tasimasi veya gercek zamanli veri akisi eklenmedi. Uygulama mevcut `Dataset/`, mevcut benchmark klasoru, `Output/*.parquet` ve mevcut backtest CSV ciktilarini okur.
