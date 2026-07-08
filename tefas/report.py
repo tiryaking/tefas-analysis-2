@@ -875,12 +875,14 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
         canvas.line(14 * mm, 9 * mm, landscape(A4)[0] - 14 * mm, 9 * mm)
         canvas.restoreState()
 
-    # multiBuild: TOC sayfa numaraları ikinci geçişte oturur.
-    doc.multiBuild(story, onFirstPage=footer, onLaterPages=footer)
+    # multiBuild: TOC sayfa numaraları ikinci geçişte oturur. Temp grafik
+    # klasörü `finally` ile silinir: PDF kilitliyse (örn. görüntüleyicide açık)
+    # build hata fırlatır — cleanup başarı/hata fark etmeksizin çalışmalı,
+    # yoksa `_..._charts_XXXXXXXX` klasörleri Reports altında birikir.
     try:
-        shutil.rmtree(chart_dir)
-    except OSError:
-        pass
+        doc.multiBuild(story, onFirstPage=footer, onLaterPages=footer)
+    finally:
+        shutil.rmtree(chart_dir, ignore_errors=True)
 
     print(f"[OK] Konsolide premium rapor: {out_path}")
     return out_path
@@ -1112,11 +1114,10 @@ def generate_comparison(met: pd.DataFrame, combined: pd.DataFrame, fund_type: st
         canvas.line(14 * mm, 9 * mm, landscape(A4)[0] - 14 * mm, 9 * mm)
         canvas.restoreState()
 
-    doc.build(story, onFirstPage=footer, onLaterPages=footer)
     try:
-        shutil.rmtree(chart_dir)
-    except OSError:
-        pass
+        doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    finally:
+        shutil.rmtree(chart_dir, ignore_errors=True)
 
     print(f"[OK] Karşılaştırma raporu: {out_path}")
     return out_path
