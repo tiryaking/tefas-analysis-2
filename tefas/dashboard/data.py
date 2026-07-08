@@ -1,8 +1,8 @@
-"""Dashboard veri katmanı: mtime-anahtarlı, önbellekli parquet okuyucular.
+"""Dashboard veri katmani: mtime-anahtarli, onbellekli parquet okuyucular.
 
-`st.cache_data` anahtarına dosyanın mtime'ı girer: yeni bir `tefas run`
-parquet'i tazelediğinde dashboard bir sonraki etkileşimde otomatik yeniden
-yükler; dosyayı kilitlemez (pandas oku-kapat).
+`st.cache_data` anahtarina dosyanin mtime'i girer: yeni bir `tefas run`
+parquet'i tazelediinde dashboard bir sonraki etkileimde otomatik yeniden
+yukler; dosyayi kilitlemez (pandas oku-kapat).
 """
 from __future__ import annotations
 
@@ -13,14 +13,14 @@ import streamlit as st
 
 from tefas import allocation, config, validation
 
-FUND_TYPES = {"YAT": "Yatırım", "EMK": "Emeklilik"}
+FUND_TYPES = {"YAT": "Yatirim", "EMK": "Emeklilik"}
 
 
 def _mtime(p: Path) -> float:
     return p.stat().st_mtime if p.exists() else 0.0
 
 
-@st.cache_data(show_spinner="Veri yükleniyor…")
+@st.cache_data(show_spinner="Veri yukleniyor...")
 def _read_parquet(path_str: str, mtime: float) -> pd.DataFrame:
     return pd.read_parquet(path_str)
 
@@ -52,14 +52,14 @@ def load_validation(fund_type: str = "YAT") -> validation.WalkForwardSummary:
 
 
 def prepare_decision_frame(scored: pd.DataFrame) -> pd.DataFrame:
-    """Dashboard/PDF ortak karar bayraklarını skor tablosuna ekler."""
+    """Dashboard/PDF ortak karar bayraklarini skor tablosuna ekler."""
     if scored is None or scored.empty:
         return pd.DataFrame()
     return allocation.add_decision_flags(scored)
 
 
 def recommendation_universe(scored: pd.DataFrame) -> pd.DataFrame:
-    """Ana öneri evreni; veri yetersiz fixture'larda kontrollü geri düşer."""
+    """Ana oneri evreni; veri yetersiz fixture'larda kontrollu geri duer."""
     df = prepare_decision_frame(scored)
     if df.empty:
         return df
@@ -71,7 +71,7 @@ def recommendation_universe(scored: pd.DataFrame) -> pd.DataFrame:
 
 
 def model_portfolio(scored: pd.DataFrame) -> list[dict]:
-    """Dashboard model portföyü: rapordaki allocation kurallarıyla aynı."""
+    """Dashboard model portfoyu: rapordaki allocation kurallariyla ayni."""
     universe = recommendation_universe(scored)
     if universe.empty:
         return []
@@ -82,12 +82,13 @@ def model_portfolio(scored: pd.DataFrame) -> list[dict]:
 
 
 def sidebar_fund_type() -> str:
-    """Ortak kenar çubuğu: fon tipi seçimi (sayfalar arası tutarlı)."""
+    """Ortak kenar cubuu: fon tipi secimi (sayfalar arasi tutarli)."""
     return st.sidebar.selectbox(
         "Fon tipi", list(FUND_TYPES), format_func=lambda k: f"{FUND_TYPES[k]} ({k})",
         key="fund_type")
 
 
 def no_data_warning(fund_type: str) -> None:
-    st.warning(f"`Output/` altında {FUND_TYPES[fund_type]} verisi yok. "
-               "Önce terminalde `tefas run` çalıştırın.")
+    st.warning(f"`Output/` altinda {FUND_TYPES[fund_type]} verisi yok. "
+               "nce terminalde `tefas run` calitirin.")
+

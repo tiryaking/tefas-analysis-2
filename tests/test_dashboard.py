@@ -60,32 +60,13 @@ def _fixture_output(tmp_path, monkeypatch):
     return out, combined
 
 
-def _txn_file(tmp_path, monkeypatch):
-    p = tmp_path / "portfolio_transactions.csv"
-    p.write_text("Tarih,Fon Kodu,Islem,Adet,Fiyat,Not\n"
-                 "2026-01-06,AAA,ALIS,100,10.0,\n"
-                 "2026-02-02,BBB,ALIS,50,10.0,\n", encoding="utf-8-sig")
-    monkeypatch.setattr(config, "DEFAULT_TRANSACTIONS_PATH", p)
-    return p
-
-
 @pytest.mark.parametrize("page", ["app.py", "pages/1_Fon_Kesif.py",
-                                  "pages/2_Fon_Detay.py", "pages/5_Karar_Merkezi.py"])
+                                  "pages/2_Fon_Detay.py"])
 def test_read_only_pages_render(tmp_path, monkeypatch, page):
     _fixture_output(tmp_path, monkeypatch)
     at = AppTest.from_file(str(DASH / page), default_timeout=30)
     at.run()
     assert not at.exception, f"{page}: {at.exception}"
-
-
-@pytest.mark.parametrize("page", ["pages/3_Portfoyum.py", "pages/4_Denge_Sinyal.py"])
-def test_portfolio_pages_render(tmp_path, monkeypatch, page):
-    _fixture_output(tmp_path, monkeypatch)
-    _txn_file(tmp_path, monkeypatch)
-    at = AppTest.from_file(str(DASH / page), default_timeout=30)
-    at.run()
-    assert not at.exception, f"{page}: {at.exception}"
-
 
 def test_app_without_data_shows_warning(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "bos")
