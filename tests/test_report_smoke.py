@@ -121,6 +121,16 @@ def test_heatmap_all_positive_months(tmp_path):
     assert out is not None and (tmp_path / "hm.png").exists()
 
 
+def test_risk_contribution_chart_created(tmp_path):
+    risk = {
+        "risk_contributions": {"AAA": 0.25, "BBB": 0.55, "CCC": 0.20},
+        "weights": {"AAA": 0.33, "BBB": 0.33, "CCC": 0.34},
+    }
+    portfolio = [{"Fon Kodu": c} for c in ["AAA", "BBB", "CCC"]]
+    out = report._chart_risk_contribution(risk, portfolio, tmp_path / "risk.png")
+    assert out is not None and (tmp_path / "risk.png").exists()
+
+
 def test_backtest_summary_from_csv(tmp_path):
     p = tmp_path / "bt.csv"
     pd.DataFrame({

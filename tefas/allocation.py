@@ -44,6 +44,8 @@ def add_decision_flags(df: pd.DataFrame) -> pd.DataFrame:
         if "Fon_Toplam_Deger_Milyon_TL" in out.columns else pd.Series(np.nan, index=idx)
     vol = pd.to_numeric(out.get("Yillik_Volatilite"), errors="coerce") \
         if "Yillik_Volatilite" in out.columns else pd.Series(np.nan, index=idx)
+    drawdown = pd.to_numeric(out.get("Max_Drawdown"), errors="coerce") \
+        if "Max_Drawdown" in out.columns else pd.Series(np.nan, index=idx)
     rf_ustu = out["Rf_Ustu"].fillna(False).astype(bool) if "Rf_Ustu" in out.columns \
         else pd.Series(True, index=idx)
 
@@ -52,6 +54,10 @@ def add_decision_flags(df: pd.DataFrame) -> pd.DataFrame:
         (age.notna() & (age < 1.0))
     ).astype(bool)
     out["Dusuk_AUM"] = (aum.notna() & (aum < config.AUM_BONUS_THRESHOLD)).astype(bool)
+    high_dd_cutoff = drawdown.quantile(0.75) if drawdown.notna().sum() >= 4 else drawdown.median()
+    out["Yuksek_Drawdown"] = (
+        drawdown.notna() & pd.notna(high_dd_cutoff) & (drawdown >= float(high_dd_cutoff)) & (drawdown >= 10.0)
+    ).astype(bool)
     out["Likidite_Sinyali"] = np.select(
         [aum.isna(), out["Dusuk_AUM"]],
         ["bilinmiyor", "dusuk_aum"],
@@ -75,6 +81,8 @@ def add_decision_flags(df: pd.DataFrame) -> pd.DataFrame:
             row_flags.append("uygunluk disi" if not bool(r.get("Izleme_Listesi_Adayi")) else "kisa gecmis")
         if bool(r.get("Dusuk_AUM")):
             row_flags.append("dusuk AUM")
+        if bool(r.get("Yuksek_Drawdown")):
+            row_flags.append("yuksek drawdown")
         if bool(r.get("Dusuk_Vol_Rf_Alti")):
             row_flags.append("dusuk oynaklik ama rf alti")
         if "Reel_Getiri_1Y" in out.columns and pd.notna(r.get("Reel_Getiri_1Y")):

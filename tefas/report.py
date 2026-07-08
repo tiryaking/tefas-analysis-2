@@ -368,6 +368,7 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
              if c in metrics.columns and c not in df.columns]
     if extra:
         df = df.merge(metrics[["Fon Kodu"] + extra], on="Fon Kodu", how="left")
+    df = allocation.add_decision_flags(df)
 
     n_funds = len(df)
     # Ortak fiyat pivotu: pivot gerektiren grafik üreticilerine BİR KEZ kurulup
@@ -377,10 +378,12 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
     # Öneriler yalnızca UYGUN fonlardan (AUM/yaş kriterlerini geçen); sıralama
     # ise tüm evren üzerinden yapıldı (bkz. metrics.compute_metrics). rf artık
     # eleme değil bilgilendirici bayrak (Rf_Ustu). Uygun yoksa tüm evrene düşülür.
-    elig = df[df["Uygun"]].copy() if "Uygun" in df.columns else df.copy()
+    elig = df[df["Oneri_Uygun"]].copy() if "Oneri_Uygun" in df.columns else (
+        df[df["Uygun"]].copy() if "Uygun" in df.columns else df.copy())
     if elig.empty:
         elig = df.copy()
-    n_elig = int(df["Uygun"].sum()) if "Uygun" in df.columns else n_funds
+    n_elig = int(df["Oneri_Uygun"].sum()) if "Oneri_Uygun" in df.columns else (
+        int(df["Uygun"].sum()) if "Uygun" in df.columns else n_funds)
     styles = _styles()
     today = datetime.now().strftime("%d.%m.%Y")
     mac = config.macro()
@@ -448,7 +451,7 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
     pf_ = lambda m: f"{m * 100:.0f}%"
     cards = [
         (f"{n_funds:,}", "Analiz edilen fon"),
-        (f"{n_elig:,}", "Uygun (AUM/yaş)"),
+        (f"{n_elig:,}", "Ana öneriye uygun"),
         (pct(avg("Yillik_Getiri")), "Ort. yıllık getiri"),
         (pct(avg("Yillik_Volatilite")), "Ort. volatilite"),
         (fmt(avg("Sharpe_Orani"), 2), "Ort. Sharpe"),
@@ -508,7 +511,7 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
         ]
     story.append(PageBreak())
 
-    # 3. Yönetici özeti
+    # 3. Karar özeti
     kpi_rows = [["Analiz edilen fon", str(n_funds), "Ort. yıllık getiri", pct(avg("Yillik_Getiri"))],
                 ["Ort. volatilite", pct(avg("Yillik_Volatilite")), "Ort. Sharpe", fmt(avg("Sharpe_Orani"), 2)],
                 ["Ort. Max Drawdown", pct(avg("Max_Drawdown")), "Ort. composite skor", fmt(avg("Overall_Score"), 1)]]
@@ -518,7 +521,7 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
     kpi_tbl.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), LIGHT), ("BOX", (0, 0), (-1, -1), 0.5, LINE),
                                  ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.white), ("TOPPADDING", (0, 0), (-1, -1), 6),
                                  ("BOTTOMPADDING", (0, 0), (-1, -1), 6), ("LEFTPADDING", (0, 0), (-1, -1), 8)]))
-    story += [Paragraph("YÖNETİCİ ÖZETİ", styles["Section"]), kpi_tbl, Spacer(1, 4 * mm),
+    story += [Paragraph("KARAR ÖZETİ", styles["Section"]), kpi_tbl, Spacer(1, 4 * mm),
               Paragraph(f"<b>Öne çıkanlar:</b> Composite skora göre en iyi 5 fon: <b>{', '.join(top_overall['Fon Kodu'].tolist())}</b>. "
                         f"Bu fonlar; risk-ayarlı getiri (Sharpe/Sortino), drawdown kontrolü, getiri ve likidite eksenlerinin "
                         f"yüzdelik-sıra bileşimiyle seçilmiştir. Veri kalitesi şüpheli (> %{config.DATA_QUALITY_MAX_DAILY_MOVE:.0f} "
@@ -547,7 +550,7 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
                                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5), ("LEFTPADDING", (0, 0), (-1, -1), 8)]))
     rf_note = f" Bunların {int(elig['Rf_Ustu'].sum())} tanesi rf (%{risk_free_rate:.0f}) üzeri getiri sağlıyor." \
         if "Rf_Ustu" in elig.columns else ""
-    story += [Paragraph(f"Benchmark Karşılaştırması (AUM/yaş kriterlerini geçen {n_elig} uygun fon üzerinden):{rf_note}",
+    story += [Paragraph(f"Benchmark Karşılaştırması (ana öneriye uygun {n_elig} fon üzerinden):{rf_note}",
                         styles["SubSec"]),
               bench_tbl, Spacer(1, 2 * mm)]
 
@@ -562,6 +565,28 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
         f"güvenilirlik-düzeltmesi uygulanır (bkz. Metodoloji).",
         styles["BodySm"]), Spacer(1, 2 * mm)]
 
+    flag_defs = [
+        ("rf altı", "Rf_Ustu", lambda s: int((~s.fillna(False).astype(bool)).sum())),
+        ("reel negatif", "Reel_Getiri_1Y", lambda s: int((pd.to_numeric(s, errors="coerce") <= 0).sum())),
+        ("kısa geçmiş", "Kisa_Gecmis", lambda s: int(s.fillna(False).astype(bool).sum())),
+        ("düşük AUM", "Dusuk_AUM", lambda s: int(s.fillna(False).astype(bool).sum())),
+        ("yüksek drawdown", "Yuksek_Drawdown", lambda s: int(s.fillna(False).astype(bool).sum())),
+        ("düşük oynaklık ama rf altı", "Dusuk_Vol_Rf_Alti", lambda s: int(s.fillna(False).astype(bool).sum())),
+    ]
+    flag_rows = []
+    for label, col, counter in flag_defs:
+        if col in df.columns:
+            flag_rows.append([Paragraph(label, styles["CellB"]),
+                              Paragraph(fmt(counter(df[col]), 0), styles["Cell"])])
+    if flag_rows:
+        story += [
+            Paragraph("UYARI BAYRAKLARI", styles["Section"]),
+            Paragraph("Bu bayraklar fonu otomatik olarak diskalifiye etmez; karar masasındaki ana risk/uygunluk notlarını görünür kılar.",
+                      styles["BodySm"]),
+            _make_table(["Bayrak", "Fon Sayısı"], flag_rows, [70 * mm, 28 * mm], styles, align_right_from=1),
+            Spacer(1, 3 * mm),
+        ]
+
     img = _chart_top_returns(elig, chart_dir / "top_returns.png")
     if img:
         story.append(Image(img, width=200 * mm, height=87 * mm))
@@ -569,13 +594,14 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
 
     # 4. En iyi fonlar
     rf_mark = lambda r: "✓" if bool(r.get("Rf_Ustu")) else "—"
-    headers = ["Kod", "Fon Adı", "Skor", "Yıl. Get.", "Volat.", "Sharpe", "Sortino", "Max DD", "rf+", "Gerekçe"]
-    cw = [13 * mm, 52 * mm, 13 * mm, 16 * mm, 16 * mm, 15 * mm, 15 * mm, 15 * mm, 9 * mm, 58 * mm]
+    headers = ["Kod", "Fon Adı", "Skor", "Yıl. Get.", "Volat.", "Sharpe", "Max DD", "rf+", "Bayraklar", "Gerekçe"]
+    cw = [13 * mm, 42 * mm, 13 * mm, 16 * mm, 15 * mm, 14 * mm, 15 * mm, 9 * mm, 42 * mm, 55 * mm]
     rows = [[Paragraph(_code_label(r), styles["CellB"]), Paragraph(short_name(r["Fon Adi"], 42), styles["Cell"]),
              Paragraph(fmt(r.get("Overall_Score"), 1), styles["Cell"]), Paragraph(pct(r.get("Yillik_Getiri")), styles["Cell"]),
              Paragraph(pct(r.get("Yillik_Volatilite")), styles["Cell"]), Paragraph(fmt(r.get("Sharpe_Orani"), 2), styles["Cell"]),
-             Paragraph(fmt(r.get("Sortino_Orani"), 2), styles["Cell"]), Paragraph(pct(r.get("Max_Drawdown")), styles["Cell"]),
+             Paragraph(pct(r.get("Max_Drawdown")), styles["Cell"]),
              Paragraph(rf_mark(r), styles["Cell"]),
+             Paragraph(short_name(r.get("Karar_Bayraklari", "temiz"), 52), styles["Cell"]),
              Paragraph(build_rationale(r), styles["Rationale"])] for _, r in elig.nlargest(12, "Overall_Score").iterrows()]
     story += [Paragraph("EN İYİ FONLAR — GENEL SIRALAMA", styles["Section"]),
               Paragraph("Composite skora göre ilk 12 <b>uygun</b> fon (AUM/yaş kriterlerini geçen) ve her biri için kısa yatırım gerekçesi. "
@@ -637,6 +663,10 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
     detail_cols = ["Yillik_Getiri", "Yillik_Volatilite", "Sharpe_Orani", "Sortino_Orani",
                    "Max_Drawdown", "VaR_95", "Reel_Getiri_1Y", "Fon_Toplam_Deger_Milyon_TL"]
     theme_meds = themes.theme_medians(df, detail_cols) if "Tema" in df.columns else None
+    story.append(Paragraph("FON DETAYLARI", styles["Section"]))
+    story.append(Paragraph("İlk 6 öneri için tam sayfa fon kırılımı: büyüme, drawdown, aylık getiriler ve tema/evren kıyası.",
+                           styles["BodySm"]))
+    story.append(PageBreak())
     for _, r in card_rows_src.iterrows():
         story += _fund_detail_flowables(r, combined, df, theme_meds, styles, chart_dir,
                                         risk_free_rate, color_map.get(str(r["Fon Kodu"])))
@@ -740,17 +770,27 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
                                "doldurulur; portfoy volatilitesi fonlarin gercek gunluk getiri kovaryansindan "
                                "hesaplanir.", styles["BodySm"]))
         pie = _chart_allocation(portfolio, chart_dir / "allocation.png")
-        ph = ["Kod", "Fon Adı", "Profil", "Tema", "Ağırlık", "Yıl. Get.", "Volat."]
-        pcw = [13 * mm, 50 * mm, 22 * mm, 30 * mm, 16 * mm, 16 * mm, 16 * mm]
-        prows = [[Paragraph(str(p["Fon Kodu"]), styles["CellB"]), Paragraph(short_name(p["Fon Adi"], 40), styles["Cell"]),
-                  Paragraph(p["Profil"], styles["Cell"]), Paragraph(p["Tema"], styles["Cell"]),
-                  Paragraph(pct(p["Agirlik"], 1), styles["Cell"]), Paragraph(pct(p["Yillik_Getiri"]), styles["Cell"]),
-                  Paragraph(pct(p["Yillik_Volatilite"]), styles["Cell"])] for p in portfolio]
+        ph = ["Kod", "Fon Adı", "Profil", "Tema", "Ağırlık", "Risk Katk.", "Yıl. Get.", "Volat.", "Bayraklar"]
+        pcw = [12 * mm, 38 * mm, 19 * mm, 25 * mm, 14 * mm, 17 * mm, 15 * mm, 15 * mm, 58 * mm]
+        rc = risk.get("risk_contributions", {}) if risk is not None else {}
+        prows = []
+        for p in portfolio:
+            code = str(p["Fon Kodu"])
+            risk_contrib = rc.get(code)
+            flags = str(p.get("Karar_Bayraklari") or "temiz")
+            if risk_contrib is not None and (risk_contrib * 100.0) > float(p.get("Agirlik", 0)) + 5.0:
+                flags = f"{flags}; yuksek risk katkisi"
+            prows.append([Paragraph(code, styles["CellB"]), Paragraph(short_name(p["Fon Adi"], 40), styles["Cell"]),
+                          Paragraph(p["Profil"], styles["Cell"]), Paragraph(p["Tema"], styles["Cell"]),
+                          Paragraph(pct(p["Agirlik"], 1), styles["Cell"]),
+                          Paragraph(pct(risk_contrib * 100.0) if risk_contrib is not None else "—", styles["Cell"]),
+                          Paragraph(pct(p["Yillik_Getiri"]), styles["Cell"]),
+                          Paragraph(pct(p["Yillik_Volatilite"]), styles["Cell"]),
+                          Paragraph(short_name(flags, 70), styles["Cell"])])
         ptable = _make_table(ph, prows, pcw, styles, align_right_from=4)
-        right = [ptable, Spacer(1, 3 * mm), Paragraph(risk_txt, styles["Body"])]
-        layout = Table([[right, Image(pie, width=92 * mm, height=74 * mm)]], colWidths=[163 * mm, 95 * mm])
-        layout.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
-        story.append(layout)
+        story += [ptable, Spacer(1, 3 * mm), Paragraph(risk_txt, styles["Body"])]
+        if pie:
+            story += [Spacer(1, 2 * mm), Image(pie, width=120 * mm, height=88 * mm)]
 
         # Çeşitlendirme + risk sürücüleri — ayrı sayfa (ısı haritası + risk katkısı)
         corr_codes = [p["Fon Kodu"] for p in portfolio]
