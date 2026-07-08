@@ -23,7 +23,7 @@ if scored is None or scored.empty:
     data.no_data_warning(ft)
     st.stop()
 
-df = scored.copy()
+df = data.prepare_decision_frame(scored)
 for col in ["Overall_Score", "Yillik_Getiri", "Yillik_Volatilite", "Sharpe_Orani",
             "Max_Drawdown", "Fon_Toplam_Deger_Milyon_TL"]:
     if col in df.columns:
@@ -36,7 +36,7 @@ temalar = sorted(df["Tema"].dropna().unique()) if "Tema" in df.columns else []
 sel_temalar = fc2.multiselect("Tema", temalar)
 min_skor = fc3.slider("Min. skor", 0, 100, 0, 5)
 min_aum = fc4.number_input("Min. AUM (mn TL)", min_value=0.0, value=0.0, step=50.0)
-only_elig = st.checkbox("Yalnızca uygun fonlar (AUM/yaş kriterlerini geçen)", value=True)
+only_elig = st.checkbox("Yalnızca ana öneri evreni", value=True)
 
 mask = pd.Series(True, index=df.index)
 if search.strip():
@@ -48,8 +48,8 @@ if sel_temalar:
 mask &= df["Overall_Score"].fillna(0) >= min_skor
 if min_aum > 0 and "Fon_Toplam_Deger_Milyon_TL" in df.columns:
     mask &= df["Fon_Toplam_Deger_Milyon_TL"].fillna(0) >= min_aum
-if only_elig and "Uygun" in df.columns:
-    mask &= df["Uygun"].fillna(False)
+if only_elig and "Oneri_Uygun" in df.columns:
+    mask &= df["Oneri_Uygun"].fillna(False)
 
 flt = df[mask].sort_values("Overall_Score", ascending=False)
 st.caption(f"{len(flt)} / {len(df)} fon gösteriliyor.")
@@ -57,7 +57,8 @@ st.caption(f"{len(flt)} / {len(df)} fon gösteriliyor.")
 cols = [c for c in ["Fon Kodu", "Fon Adi", "Tema", "Overall_Score",
                     "Conservative_Score", "Balanced_Score", "Moderate_Score", "Aggressive_Score",
                     "Yillik_Getiri", "Yillik_Volatilite", "Sharpe_Orani", "Sortino_Orani",
-                    "Max_Drawdown", "Fon_Toplam_Deger_Milyon_TL", "Rf_Ustu"] if c in flt.columns]
+                    "Max_Drawdown", "Fon_Toplam_Deger_Milyon_TL", "Rf_Ustu",
+                    "Karar_Bayraklari"] if c in flt.columns]
 st.dataframe(flt[cols], use_container_width=True, hide_index=True, height=420,
              column_config={"Overall_Score": st.column_config.ProgressColumn(
                  "Skor", min_value=0, max_value=100, format="%.1f")})

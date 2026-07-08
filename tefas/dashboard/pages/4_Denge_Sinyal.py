@@ -45,8 +45,7 @@ total_value = float(open_pos["Deger"].sum())
 current_weights = {str(r["Fon Kodu"]): float(r["Agirlik"]) * 100
                    for _, r in open_pos.iterrows()}
 
-elig = scored[scored["Uygun"]] if "Uygun" in scored.columns else scored
-model = allocation.build_portfolio(elig if not elig.empty else scored)
+model = data.model_portfolio(scored)
 model_weights = {str(p["Fon Kodu"]): float(p["Agirlik"]) for p in model}
 
 # ── Ağırlık kıyası ───────────────────────────────────────────────────────────

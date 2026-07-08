@@ -30,18 +30,19 @@ if scored is None or scored.empty:
 combined = data.load_combined(ft)
 as_of = pd.to_datetime(combined["Tarih"]).max().date() if combined is not None else "—"
 
-elig = scored[scored["Uygun"]] if "Uygun" in scored.columns else scored
+decision = data.prepare_decision_frame(scored)
+elig = data.recommendation_universe(scored)
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Analiz edilen fon", f"{len(scored):,}")
-c2.metric("Uygun (AUM/yaş)", f"{len(elig):,}")
-c3.metric("Ort. yıllık getiri", f"%{pd.to_numeric(scored['Yillik_Getiri'], errors='coerce').mean():.1f}")
-c4.metric("Ort. Sharpe", f"{pd.to_numeric(scored['Sharpe_Orani'], errors='coerce').mean():.2f}")
+c1.metric("Analiz edilen fon", f"{len(decision):,}")
+c2.metric("Ana öneri evreni", f"{len(elig):,}")
+c3.metric("Ort. yıllık getiri", f"%{pd.to_numeric(decision['Yillik_Getiri'], errors='coerce').mean():.1f}")
+c4.metric("Ort. Sharpe", f"{pd.to_numeric(decision['Sharpe_Orani'], errors='coerce').mean():.2f}")
 c5.metric("Veri sonu", str(as_of))
 
 st.subheader("En iyi 10 fon — composite skor")
 cols = [c for c in ["Fon Kodu", "Fon Adi", "Tema", "Overall_Score", "Yillik_Getiri",
                     "Yillik_Volatilite", "Sharpe_Orani", "Max_Drawdown",
-                    "Fon_Toplam_Deger_Milyon_TL"] if c in elig.columns]
+                    "Fon_Toplam_Deger_Milyon_TL", "Karar_Bayraklari"] if c in elig.columns]
 top10 = elig.nlargest(10, "Overall_Score")[cols].reset_index(drop=True)
 st.dataframe(top10, use_container_width=True, hide_index=True,
              column_config={

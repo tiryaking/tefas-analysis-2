@@ -70,7 +70,7 @@ def _txn_file(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("page", ["app.py", "pages/1_Fon_Kesif.py",
-                                  "pages/2_Fon_Detay.py"])
+                                  "pages/2_Fon_Detay.py", "pages/5_Karar_Merkezi.py"])
 def test_read_only_pages_render(tmp_path, monkeypatch, page):
     _fixture_output(tmp_path, monkeypatch)
     at = AppTest.from_file(str(DASH / page), default_timeout=30)
@@ -93,3 +93,19 @@ def test_app_without_data_shows_warning(tmp_path, monkeypatch):
     at.run()
     assert not at.exception
     assert at.warning, "veri yokken uyarı bekleniyordu"
+
+
+def test_dashboard_decision_helpers(tmp_path, monkeypatch):
+    _fixture_output(tmp_path, monkeypatch)
+    from tefas.dashboard import data
+
+    scored = data.load_scored("YAT")
+    decision = data.prepare_decision_frame(scored)
+    universe = data.recommendation_universe(scored)
+    model = data.model_portfolio(scored)
+    validation_summary = data.load_validation("YAT")
+
+    assert "Karar_Bayraklari" in decision.columns
+    assert not universe.empty
+    assert model
+    assert validation_summary.status == "missing"
