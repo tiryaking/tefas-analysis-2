@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import config, themes
+from . import config, model_config, themes
 
 
 def shrunk_annual_return(df: pd.DataFrame, full_days: int | None = None) -> pd.Series:
@@ -92,6 +92,8 @@ def _momentum(df: pd.DataFrame) -> pd.Series:
 
 
 def _risk_profiles(df: pd.DataFrame, consistency: pd.Series) -> dict[str, pd.Series]:
+    cfg = model_config.current()
+    w = cfg.profile_weights
     vol_low = _pct_rank(df["Yillik_Volatilite"], ascending=False)
     vol_pct = _pct_rank(df["Yillik_Volatilite"])
     dd_low = _pct_rank(df["Max_Drawdown"], ascending=False)
@@ -114,15 +116,18 @@ def _risk_profiles(df: pd.DataFrame, consistency: pd.Series) -> dict[str, pd.Ser
     # yalnızca bilgilendirici `Rf_Ustu` bayrağı üretir.)
     calmar_gate = pd.Series(np.where((df["Calmar_Orani"] > 0).fillna(False), 100.0, 40.0), index=df.index)
 
+    cw, bw, mw, aw = w["Conservative"], w["Balanced"], w["Moderate"], w["Aggressive"]
     return {
-        "Conservative": vol_low * 0.40 + dd_low * 0.30 + pos_days * 0.15 +
-                        consistency * 0.15,
-        "Balanced": sortino * 0.30 + calmar * 0.25 + vol_band_mid * 0.20 +
-                    ret_1y * 0.15 + consistency * 0.10,
-        "Moderate": sharpe * 0.40 + ret_1y * 0.25 + vol_band_mid * 0.20 +
-                    consistency * 0.15,
-        "Aggressive": ret_1y * 0.40 + momentum_rank * 0.25 + vol_pct * 0.15 +
-                      calmar * 0.10 + calmar_gate * 0.10,
+        "Conservative": vol_low * cw["vol_low"] + dd_low * cw["dd_low"] +
+                        pos_days * cw["pos_days"] + consistency * cw["consistency"],
+        "Balanced": sortino * bw["sortino"] + calmar * bw["calmar"] +
+                    vol_band_mid * bw["vol_band_mid"] + ret_1y * bw["return"] +
+                    consistency * bw["consistency"],
+        "Moderate": sharpe * mw["sharpe"] + ret_1y * mw["return"] +
+                    vol_band_mid * mw["vol_band_mid"] + consistency * mw["consistency"],
+        "Aggressive": ret_1y * aw["return"] + momentum_rank * aw["momentum"] +
+                      vol_pct * aw["vol_pct"] + calmar * aw["calmar"] +
+                      calmar_gate * aw["calmar_gate"],
     }
 
 
@@ -174,14 +179,16 @@ def score_funds(metrics: pd.DataFrame, combined: pd.DataFrame | None = None,
     # kısa geçmiş yapay avantaj sağlamasın.
     ret_pct = _pct_rank(df["Yillik_Getiri_Duzeltilmis"], fill=25.0)
     tema_rel = pd.to_numeric(df["Tema_Rel_Skor"], errors="coerce").fillna(ret_pct)
+    w = model_config.current().overall_weights
+    df["Model_Version"] = model_config.current().version
     df["Overall_Score"] = (
-        0.25 * _pct_rank(df["Sharpe_Orani"]) +
-        0.15 * _pct_rank(df["Sortino_Orani"]) +
-        0.20 * _pct_rank(df["Max_Drawdown"], ascending=False) +
-        0.20 * ret_pct +
-        0.05 * tema_rel +
-        0.075 * consistency +
-        0.075 * liq
+        w["sharpe"] * _pct_rank(df["Sharpe_Orani"]) +
+        w["sortino"] * _pct_rank(df["Sortino_Orani"]) +
+        w["drawdown"] * _pct_rank(df["Max_Drawdown"], ascending=False) +
+        w["return"] * ret_pct +
+        w["theme_relative"] * tema_rel +
+        w["consistency"] * consistency +
+        w["liquidity"] * liq
     ).round(1)
 
     return df

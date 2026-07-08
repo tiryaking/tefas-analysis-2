@@ -99,6 +99,10 @@ def summarize_walk_forward_csv(path: Path) -> WalkForwardSummary:
         agg["Turnover"] = (turnover_col, "mean")
 
     table = folds.groupby("Ufuk_Ay").agg(**agg).round(4).reset_index()
+    if "Model_Version" in folds.columns:
+        versions = folds.groupby("Ufuk_Ay")["Model_Version"].agg(
+            lambda s: ", ".join(sorted({str(v) for v in s.dropna().unique()})))
+        table = table.merge(versions.rename("Model_Version"), on="Ufuk_Ay", how="left")
     return WalkForwardSummary(
         table=table,
         status="ok",

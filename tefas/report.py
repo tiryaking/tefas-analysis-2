@@ -33,7 +33,7 @@ from reportlab.platypus.tableofcontents import TableOfContents
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-from . import allocation, config, portfolio as pf, themes, validation
+from . import allocation, config, model_config, portfolio as pf, themes, validation
 from .themes import fund_theme  # geriye uyumluluk: report.fund_theme kullanılıyordu
 from .charts import (
     FUND_PALETTE,
@@ -387,6 +387,7 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
     styles = _styles()
     today = datetime.now().strftime("%d.%m.%Y")
     mac = config.macro()
+    model_cfg = model_config.current()
     # Config dosyasında bulunmayıp koddaki varsayılana düşen oranlar kapakta işaretlenir.
     dflt = lambda key: " (varsayılan)" if key in mac.defaults_used else ""
     story = []
@@ -398,6 +399,7 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
         Paragraph(f"{paths.fund_name} Fonları &nbsp;|&nbsp; Kantitatif Analiz, Risk Profilleme & Portföy Önerileri", styles["CoverSub"]),
         Spacer(1, 12 * mm),
         Paragraph(f"Rapor Tarihi: {today}<br/>Analiz Edilen Fon Sayısı: {n_funds}<br/>"
+                  f"Model Sürümü: {model_cfg.version}<br/>"
                   f"Risksiz Faiz Oranı (Benchmark): %{risk_free_rate:.1f}{dflt('risk_free_rate') if risk_free_rate == mac.risk_free_rate else ''}<br/>"
                   f"Enflasyon (TÜFE): %{mac.inflation_rate:.0f}{dflt('inflation_rate')} &nbsp;|&nbsp; "
                   f"Politika Faizi: %{mac.policy_rate:.0f}{dflt('policy_rate')}", styles["CoverInfo"]),

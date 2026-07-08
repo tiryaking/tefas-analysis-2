@@ -26,7 +26,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from . import metrics, scoring
+from . import metrics, model_config, scoring
 
 # Bir fiyat gözleminin "o gün için geçerli" sayılacağı azami bayatlık.
 MAX_STALE_DAYS = 10
@@ -37,6 +37,7 @@ class BacktestResult:
     folds: pd.DataFrame        # kat × ufuk satırları
     summary: pd.DataFrame      # ufuk başına özet
     avg_turnover: float        # ardışık katlar arası ortalama devir (0–1)
+    model_version: str = model_config.DEFAULT_MODEL_VERSION
 
 
 def _price_asof(s: pd.Series, when: pd.Timestamp,
@@ -103,6 +104,7 @@ def run_backtest(combined: pd.DataFrame, risk_free_rate: float, *,
         return None
 
     rows, weight_hist = [], []
+    model_version = model_config.current().version
     for t in fold_dates:
         hist = c[c["Tarih"] <= t]
         # Kat başına metrik/skor INFO çıktısı gürültü olur — her durumda sustur;
@@ -143,6 +145,7 @@ def run_backtest(combined: pd.DataFrame, risk_free_rate: float, *,
                 continue
             ew, med = float(uni.mean()), float(np.median(uni))
             rows.append({"Tarih": t.date(), "Ufuk_Ay": h,
+                         "Model_Version": model_version,
                          "Portfoy_Getiri": round(port_ret, 4),
                          "Evren_Ort": round(ew, 4), "Evren_Medyan": round(med, 4),
                          "Fark": round(port_ret - ew, 4),
@@ -166,7 +169,9 @@ def run_backtest(combined: pd.DataFrame, risk_free_rate: float, *,
                .round(4).reset_index())
     tos = [_turnover(a, b) for a, b in zip(weight_hist, weight_hist[1:])]
     avg_to = float(np.mean(tos)) if tos else 0.0
-    return BacktestResult(folds=folds, summary=summary, avg_turnover=avg_to)
+    summary["Model_Version"] = model_version
+    return BacktestResult(folds=folds, summary=summary, avg_turnover=avg_to,
+                          model_version=model_version)
 
 
 def print_summary(result: BacktestResult, risk_free_rate: float) -> None:
@@ -174,6 +179,7 @@ def print_summary(result: BacktestResult, risk_free_rate: float) -> None:
     print("\n" + "=" * 64)
     print("WALK-FORWARD DOĞRULAMA ÖZETİ")
     print("=" * 64)
+    print(f"Model sürümü: {result.model_version}")
     print(result.summary.to_string(index=False))
     print(f"\nOrtalama aylık portföy devri (turnover): {result.avg_turnover:.1%}")
     for _, r in result.summary.iterrows():
