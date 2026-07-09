@@ -12,31 +12,35 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from tefas.dashboard import data
+from tefas.dashboard import data, ui
 
 st.set_page_config(page_title="Fon Kesif", page_icon=":mag:", layout="wide")
 ft = data.sidebar_fund_type()
-st.title("Fon Kesif")
+st.title("Fon Keşif")
 
 scored = data.load_scored(ft)
 if scored is None or scored.empty:
     data.no_data_warning(ft)
     st.stop()
 
-df = data.prepare_decision_frame(scored)
+df = data.enriched_frame(ft)
 for col in ["Overall_Score", "Yillik_Getiri", "Yillik_Volatilite", "Sharpe_Orani",
-            "Max_Drawdown", "Fon_Toplam_Deger_Milyon_TL"]:
+            "Max_Drawdown", "Fon_Toplam_Deger_Milyon_TL", "VaR_95", "Reel_Getiri_1Y"]:
     if col in df.columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
-#  Filtreler 
-fc1, fc2, fc3, fc4 = st.columns([2, 1, 1, 1])
+#  Filtreler
+fc1, fc2, fc3, fc4, fc5 = st.columns([2, 1, 1, 1, 1])
+# Karşılaştırma sayfasından `?tema=` linkiyle gelen ön-filtre
+qp_tema = st.query_params.get("tema")
 search = fc1.text_input("Ara (kod veya ad)", "")
 temalar = sorted(df["Tema"].dropna().unique()) if "Tema" in df.columns else []
-sel_temalar = fc2.multiselect("Tema", temalar)
+sel_temalar = fc2.multiselect("Tema", temalar,
+                              default=[qp_tema] if qp_tema in temalar else [])
 min_skor = fc3.slider("Min. skor", 0, 100, 0, 5)
-min_aum = fc4.number_input("Min. AUM (mn TL)", min_value=0.0, value=0.0, step=50.0)
-only_elig = st.checkbox("Yalnizca ana oneri evreni", value=True)
+max_dd = fc4.slider("Maks. drawdown", 0, 80, 80, 5)
+min_aum = fc5.number_input("Min. AUM (mn TL)", min_value=0.0, value=0.0, step=50.0)
+only_elig = st.checkbox("Yalnızca ana öneri evreni", value=True)
 
 mask = pd.Series(True, index=df.index)
 if search.strip():
@@ -46,22 +50,25 @@ if search.strip():
 if sel_temalar:
     mask &= df["Tema"].isin(sel_temalar)
 mask &= df["Overall_Score"].fillna(0) >= min_skor
+if "Max_Drawdown" in df.columns:
+    mask &= df["Max_Drawdown"].fillna(999) <= max_dd
 if min_aum > 0 and "Fon_Toplam_Deger_Milyon_TL" in df.columns:
     mask &= df["Fon_Toplam_Deger_Milyon_TL"].fillna(0) >= min_aum
 if only_elig and "Oneri_Uygun" in df.columns:
     mask &= df["Oneri_Uygun"].fillna(False)
 
 flt = df[mask].sort_values("Overall_Score", ascending=False)
-st.caption(f"{len(flt)} / {len(df)} fon gosteriliyor.")
+st.caption(f"{len(flt)} / {len(df)} fon gösteriliyor.")
 
 cols = [c for c in ["Fon Kodu", "Fon Adi", "Tema", "Overall_Score",
                     "Conservative_Score", "Balanced_Score", "Moderate_Score", "Aggressive_Score",
                     "Yillik_Getiri", "Yillik_Volatilite", "Sharpe_Orani", "Sortino_Orani",
-                    "Max_Drawdown", "Fon_Toplam_Deger_Milyon_TL", "Rf_Ustu",
-                    "Karar_Bayraklari"] if c in flt.columns]
+                    "Max_Drawdown", "VaR_95", "Reel_Getiri_1Y", "Fon_Toplam_Deger_Milyon_TL",
+                    "Rf_Ustu", "Karar_Bayraklari"] if c in flt.columns]
 st.dataframe(flt[cols], width="stretch", hide_index=True, height=420,
              column_config={"Overall_Score": st.column_config.ProgressColumn(
                  "Skor", min_value=0, max_value=100, format="%.1f")})
+ui.download_df(flt[cols], f"fon_kesif_{ft.lower()}.csv", key="dl_kesif")
 
 #  Risk-getiri haritasi 
 st.subheader("Risk - Getiri Haritasi")

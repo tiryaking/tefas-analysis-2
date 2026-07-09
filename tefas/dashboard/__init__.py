@@ -1,7 +1,9 @@
 """Interaktif yerel web dashboard (Streamlit) - `tefas dashboard` ile acilir.
 
-Pipeline'a sifir baimlilik: sayfalar yalnizca Output/*.parquet OKUR ve
-tefas.charts `prep_*` / tefas.holdings / tefas.allocation saf fonksiyonlarini
-kullanir. Streamlit + plotly opsiyoneldir: `pip install -e .[dashboard]`.
+Salt-okuma BI analiz paneli: yalnizca Output/*.parquet OKUR ve
+tefas.charts `prep_*` / tefas.comparison / tefas.allocation / tefas.narrative
+saf fonksiyonlarini kullanir. Kisisel portfoy (holdings) ozellikleri BILEREK
+dashboard'da yoktur; onlar yalnizca `tefas holdings` CLI'sindedir. Streamlit +
+plotly opsiyoneldir: `pip install -e .[dashboard]`.
 """
 

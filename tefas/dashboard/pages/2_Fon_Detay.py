@@ -1,7 +1,8 @@
-"""Fon Detay: tek fonun buyumesi, drawdown'u, yuvarlanan metrikleri ve kunyesi.
+"""Fon Detay: tek fonun künyesi, gerekçesi, akran kıyası, büyüme/drawdown/
+rolling grafikleri ve skor geçmişi.
 
-Grafik verileri PDF ile AYNI `charts.prep_*` fonksiyonlarindan gelir - web ile
-rapor ayni sayilari gosterir; yalnizca cizici farkli (Plotly  matplotlib).
+Grafik verileri PDF ile AYNI `charts.prep_*` fonksiyonlarından gelir — web ile
+rapor aynı sayıları gösterir; yalnızca çizici farklı (Plotly ↔ matplotlib).
 """
 from __future__ import annotations
 
@@ -13,94 +14,141 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from tefas import charts
-from tefas.dashboard import data
+from tefas import charts, config, narrative, themes
+from tefas.dashboard import data, figures, ui
 
 st.set_page_config(page_title="Fon Detay", page_icon=":microscope:", layout="wide")
 ft = data.sidebar_fund_type()
 st.title("Fon Detay")
 
-scored = data.load_scored(ft)
+scored = data.enriched_frame(ft)
 combined = data.load_combined(ft)
 if scored is None or scored.empty or combined is None:
     data.no_data_warning(ft)
     st.stop()
 
-labels = {str(r["Fon Kodu"]): f"{r['Fon Kodu']} - {str(r['Fon Adi'])[:60]}"
-          for _, r in scored.iterrows()}
+labels = ui.fund_label_map(scored)
 default_code = scored.nlargest(1, "Overall_Score")["Fon Kodu"].iloc[0]
-code = st.selectbox("Fon sec", sorted(labels), index=sorted(labels).index(str(default_code)),
+code = st.selectbox("Fon seç", sorted(labels),
+                    index=sorted(labels).index(str(default_code)),
                     format_func=lambda c: labels[c])
 
 row = scored[scored["Fon Kodu"].astype(str) == code].iloc[0]
 st.caption(str(row["Fon Adi"]))
+st.info("💡 " + narrative.build_rationale(row))
 
-m1, m2, m3, m4, m5, m6 = st.columns(6)
+# ── Tear-sheet metrik kartları ────────────────────────────────────────────────
 num = lambda c: pd.to_numeric(pd.Series([row.get(c)]), errors="coerce").iloc[0]
-m1.metric("Composite skor", f"{num('Overall_Score'):.1f}")
-m2.metric("Yillik getiri", f"%{num('Yillik_Getiri'):.1f}")
-m3.metric("Volatilite", f"%{num('Yillik_Volatilite'):.1f}")
-m4.metric("Sharpe", f"{num('Sharpe_Orani'):.2f}")
-m5.metric("Max drawdown", f"%{num('Max_Drawdown'):.1f}")
-m6.metric("Tema", str(row.get("Tema", "-")))
+r1 = st.columns(6)
+r1[0].metric("Composite skor", narrative.fmt(num("Overall_Score"), 1))
+r1[1].metric("Yıllık getiri", narrative.pct(num("Yillik_Getiri")))
+r1[2].metric("Volatilite", narrative.pct(num("Yillik_Volatilite")))
+r1[3].metric("Sharpe", narrative.fmt(num("Sharpe_Orani"), 2))
+r1[4].metric("Sortino", narrative.fmt(num("Sortino_Orani"), 2))
+r1[5].metric("Tema", str(row.get("Tema", "-")))
+r2 = st.columns(6)
+r2[0].metric("Max drawdown", narrative.pct(num("Max_Drawdown")))
+r2[1].metric("Calmar", narrative.fmt(num("Calmar_Orani"), 2))
+r2[2].metric("VaR %95", narrative.pct(num("VaR_95")))
+r2[3].metric("CVaR %95", narrative.pct(num("CVaR_95")))
+r2[4].metric("Reel getiri", narrative.pct(num("Reel_Getiri_1Y")))
+r2[5].metric("AUM (mn TL)", narrative.fmt(num("Fon_Toplam_Deger_Milyon_TL"), 0))
 
-sub = combined[combined["Fon Kodu"].astype(str) == code].sort_values("Tarih")
+# ── Tarih aralığı (grafik verilerini dilimler) ────────────────────────────────
+sub = combined[combined["Fon Kodu"].astype(str) == code].sort_values("Tarih").copy()
+sub["Tarih"] = pd.to_datetime(sub["Tarih"])
+rng = None
+if len(sub) > 2:
+    lo, hi = sub["Tarih"].min().to_pydatetime(), sub["Tarih"].max().to_pydatetime()
+    if lo < hi:
+        rng = st.slider("Tarih aralığı", min_value=lo, max_value=hi, value=(lo, hi),
+                        format="YYYY-MM-DD", key="detay_range")
+if rng:
+    sub = sub[(sub["Tarih"] >= pd.Timestamp(rng[0])) & (sub["Tarih"] <= pd.Timestamp(rng[1]))]
+
 prices = pd.to_numeric(sub["Fiyat"], errors="coerce")
-t = pd.to_datetime(sub["Tarih"])
 mask = prices.notna() & (prices > 0)
 prepped = charts.prep_drawdown(prices[mask])
-
 if prepped is None:
-    st.info("Bu fon icin yeterli fiyat gecmii yok (<10 gozlem).")
+    st.info("Seçili aralıkta yeterli fiyat geçmişi yok (<10 gözlem).")
     st.stop()
 norm, dd = prepped
-tt = t[mask]
+tt = pd.to_datetime(sub["Tarih"])[mask]
 
+# ── Büyüme (akran medyanı çizgili) + sualtı ───────────────────────────────────
+theme = row.get("Tema")
+peers = scored.loc[scored["Tema"] == theme, "Fon Kodu"].astype(str).tolist() \
+    if "Tema" in scored.columns and pd.notna(theme) else []
+bench, blabel = None, "Evren medyanı"
+if len(peers) >= config.THEME_MIN_FUNDS:
+    bench = themes.theme_median_growth(combined, codes=peers)
+    blabel = f"Tema medyanı ({len(peers)} fon)"
+else:
+    bench = themes.theme_median_growth(combined)
+
+norm_df = pd.DataFrame({code: norm}, index=tt)
 c_left, c_right = st.columns(2)
-fig = go.Figure()
-fig.add_scatter(x=tt, y=norm, mode="lines", name=code, line=dict(width=2))
-fig.add_hline(y=100, line_dash="dot", line_color="grey")
-fig.update_layout(title="Kumulatif Buyume (baz=100)", height=360,
-                  yaxis_title="Deer", margin=dict(t=40, b=10))
-c_left.plotly_chart(fig, width="stretch")
-
+c_left.plotly_chart(figures.fig_growth(norm_df, benchmark=bench, benchmark_label=blabel,
+                                       title="Kümülatif Büyüme (baz=100)"), width="stretch")
 fig_dd = go.Figure()
 fig_dd.add_scatter(x=tt, y=-dd, mode="lines", fill="tozeroy", name="Drawdown",
                    line=dict(color="#c0392b", width=1))
-fig_dd.update_layout(title="Sualti / Drawdown (%)", height=360,
-                     yaxis_title="Zirveye gore kayip (%)", margin=dict(t=40, b=10))
+fig_dd.update_layout(title="Sualtı / Drawdown (%)", height=380,
+                     yaxis_title="Zirveye göre kayıp (%)", margin=dict(t=40, b=10))
 c_right.plotly_chart(fig_dd, width="stretch")
 
-#  Yuvarlanan 63 gunluk getiri & volatilite (paylailan prep_rolling) 
+# ── Yuvarlanan metrikler + aylık getiriler (paylaşılan prep) ──────────────────
 pivot = charts.price_pivot(sub)
 rolled = charts.prep_rolling(pivot, [code])
 if rolled is not None:
     roll_ret, roll_vol = rolled
-    r1, r2 = st.columns(2)
-    f1 = go.Figure()
-    f1.add_scatter(x=roll_ret.index, y=roll_ret[code], mode="lines", name="63g getiri")
-    f1.update_layout(title="Yuvarlanan 63g Getiri (yillik, %)", height=320, margin=dict(t=40, b=10))
-    r1.plotly_chart(f1, width="stretch")
-    f2 = go.Figure()
-    f2.add_scatter(x=roll_vol.index, y=roll_vol[code], mode="lines", name="63g vol",
-                   line=dict(color="#bf8410"))
-    f2.update_layout(title="Yuvarlanan 63g Volatilite (%)", height=320, margin=dict(t=40, b=10))
-    r2.plotly_chart(f2, width="stretch")
+    st.plotly_chart(figures.fig_rolling(roll_ret, roll_vol,
+                                        rf=config.macro().risk_free_rate), width="stretch")
 
-#  Aylik getiriler (paylailan prep_monthly_returns) 
 monthly = charts.prep_monthly_returns(pivot)
 if not monthly.empty and code in monthly.columns:
     mr = monthly[code].dropna()
     fig_m = go.Figure()
     fig_m.add_bar(x=[str(p) for p in mr.index], y=mr.values,
                   marker_color=["#0f8a6a" if v >= 0 else "#c0392b" for v in mr.values])
-    fig_m.update_layout(title="Aylik Getiriler (%)", height=300, margin=dict(t=40, b=10))
+    fig_m.update_layout(title="Aylık Getiriler (%)", height=300, margin=dict(t=40, b=10))
     st.plotly_chart(fig_m, width="stretch")
 
-with st.expander("Tum metrikler"):
-    metrics_table = row.to_frame("Deer").astype(str)
-    st.dataframe(metrics_table, width="stretch")
+# ── Akran kıyas tablosu (fon vs tema medyanı vs evren medyanı) ────────────────
+peer_cols = [("Yıllık Getiri", "Yillik_Getiri"), ("Volatilite", "Yillik_Volatilite"),
+             ("Sharpe", "Sharpe_Orani"), ("Sortino", "Sortino_Orani"),
+             ("Max Drawdown", "Max_Drawdown"), ("VaR %95", "VaR_95"),
+             ("Reel Getiri", "Reel_Getiri_1Y"), ("AUM (mn TL)", "Fon_Toplam_Deger_Milyon_TL")]
+if "Tema" in scored.columns:
+    theme_meds = themes.theme_medians(scored, [c for _, c in peer_cols])
+    tmed = theme_meds.loc[theme] if (theme_meds is not None and theme in theme_meds.index) else None
+    peer_rows = []
+    for label, col in peer_cols:
+        peer_rows.append({
+            "Metrik": label,
+            "Fon": narrative.fmt(row.get(col), 2),
+            "Tema Medyanı": narrative.fmt(tmed.get(col), 2) if tmed is not None and col in tmed.index else "—",
+            "Evren Medyanı": narrative.fmt(pd.to_numeric(scored[col], errors="coerce").median(), 2)
+            if col in scored.columns else "—",
+        })
+    st.subheader("Akran Kıyası")
+    st.dataframe(pd.DataFrame(peer_rows), width="stretch", hide_index=True)
 
+# ── Skor geçmişi zaman çizgisi ────────────────────────────────────────────────
+hist = data.load_history(ft)
+if hist is not None and not hist.empty:
+    fh = hist[hist["Fon Kodu"].astype(str) == code].copy()
+    if fh["Tarih"].nunique() >= 2:
+        fh["Tarih"] = pd.to_datetime(fh["Tarih"])
+        st.subheader("Skor Geçmişi")
+        st.plotly_chart(px.line(fh.sort_values("Tarih"), x="Tarih",
+                                y=["Overall_Score", "Overall_Persentil"], markers=True)
+                        .update_layout(height=320, margin=dict(t=20, b=10),
+                                       yaxis_title="Skor / Persentil"), width="stretch")
+
+with st.expander("Tüm metrikler"):
+    st.dataframe(row.to_frame("Değer").astype(str), width="stretch")
