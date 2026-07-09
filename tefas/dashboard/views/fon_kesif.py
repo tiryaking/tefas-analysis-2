@@ -63,8 +63,8 @@ cols = [c for c in ["Fon Kodu", "Fon Adi", "Tema", "Overall_Score",
                     "Yillik_Getiri", "Yillik_Volatilite", "Sharpe_Orani", "Sortino_Orani",
                     "Max_Drawdown", "VaR_95", "Reel_Getiri_1Y", "Fon_Toplam_Deger_Milyon_TL",
                     "Rf_Ustu", "Karar_Bayraklari"] if c in flt.columns]
-st.dataframe(flt[cols], width="stretch", hide_index=True, height=460,
-             column_config=ui.metric_column_config())
+st.caption("💡 Bir satıra tıklayınca fon detayına gider.")
+ui.clickable_fund_table(flt[cols], key="kesif_tbl", height=460)
 ui.download_df(flt[cols], f"fon_kesif_{ft.lower()}.csv", key="dl_kesif")
 
 #  Risk-getiri haritasi

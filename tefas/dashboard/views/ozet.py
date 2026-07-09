@@ -21,7 +21,7 @@ import plotly.express as px
 import streamlit as st
 
 from tefas import config, model_config
-from tefas.dashboard import data, ui
+from tefas.dashboard import blocks, data, ui
 
 
 
@@ -91,14 +91,11 @@ k6.metric("İzleme", f"{_flag_count(decision, 'Izleme_Listesi_Adayi'):,}")
 
 st.divider()
 
-# ── En güçlü öneri adayları (tam genişlik, formatlı — yatay scroll yok) ────────
-st.subheader("En güçlü ana öneri adayları")
-cols = [c for c in ["Fon Kodu", "Fon Adi", "Tema", "Overall_Score", "Yillik_Getiri",
-                    "Yillik_Volatilite", "Sharpe_Orani", "Max_Drawdown",
-                    "Reel_Getiri_1Y", "Karar_Bayraklari"] if c in universe.columns]
-top = _safe_top(universe, "Overall_Score", 15)[cols]
-st.dataframe(top, width="stretch", hide_index=True, column_config=ui.metric_column_config())
-ui.download_df(top, f"oneri_adaylari_{ft.lower()}.csv", key="dl_top")
+# ── Ana öneri grubu (gerekçeli tıklanabilir tablo + 3 grafik) ─────────────────
+blocks.recommendation_group(
+    "En İyi Fonlar — Genel Sıralama",
+    _safe_top(universe, "Overall_Score", 12), ft, combined,
+    n=12, key="oneri")
 
 # ── Uyarı bayrakları ──────────────────────────────────────────────────────────
 st.subheader("Uyarı bayrakları")
@@ -176,5 +173,4 @@ if not watch.empty:
     st.subheader("İzleme listesi adayları (kısa geçmiş — ana öneri dışı)")
     wcols = [c for c in ["Fon Kodu", "Fon Adi", "Tema", "Overall_Score", "Yillik_Getiri",
                          "Veri_Noktasi_Sayisi", "Karar_Bayraklari"] if c in watch.columns]
-    st.dataframe(_safe_top(watch, "Overall_Score", 12)[wcols], width="stretch",
-                 hide_index=True, column_config=ui.metric_column_config())
+    ui.clickable_fund_table(_safe_top(watch, "Overall_Score", 12)[wcols], key="watch_tbl")

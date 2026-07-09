@@ -99,6 +99,20 @@ def price_pivot(fund_type: str = "YAT") -> pd.DataFrame | None:
     return _price_pivot(str(p), _mtime(p))
 
 
+@st.cache_data(show_spinner=False)
+def _monthly(path_str: str, mtime: float) -> pd.DataFrame:
+    return charts.prep_monthly_returns(charts.price_pivot(pd.read_parquet(path_str)))
+
+
+def monthly_returns(fund_type: str = "YAT") -> pd.DataFrame | None:
+    """Önbellekli tüm-evren aylık getiri tablosu (ısı takvimlerinde evren
+    medyan satırı için tekrar tekrar hesaplanmasın)."""
+    p = config.paths_for(fund_type).combined_parquet
+    if not p.exists():
+        return None
+    return _monthly(str(p), _mtime(p))
+
+
 def prepare_decision_frame(scored: pd.DataFrame) -> pd.DataFrame:
     """Dashboard/PDF ortak karar bayraklarini skor tablosuna ekler."""
     if scored is None or scored.empty:

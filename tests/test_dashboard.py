@@ -134,6 +134,17 @@ def test_app_without_data_shows_warning(tmp_path, monkeypatch):
     assert at.warning, "veri yokken uyarı bekleniyordu"
 
 
+def test_detail_preselect_from_table_click(tmp_path, monkeypatch):
+    """Bir tabloya tıklama session_state['detay_code'] yazar; Fon Detay o fonu
+    ön-seçili açmalı."""
+    _fixture_output(tmp_path, monkeypatch)
+    at = AppTest.from_file(str(DASH / "views/fon_detay.py"), default_timeout=60)
+    at.session_state["detay_code"] = "CCC"
+    at.run()
+    assert not at.exception
+    assert at.selectbox[0].value == "CCC"       # tıklanan fon ön-seçili açıldı
+
+
 def test_comparison_page_with_two_funds(tmp_path, monkeypatch):
     _fixture_output(tmp_path, monkeypatch)
     at = AppTest.from_file(str(DASH / "views/karsilastirma.py"), default_timeout=60)

@@ -3,10 +3,40 @@ aralığı). Saf figür/veri mantığı figures.py ve data.py'de; burada yalnız
 `st` gerektiren tekrar eden parçalar."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 import streamlit as st
 
 from tefas import config
+
+# Fon Detay sayfasının mutlak yolu (st.navigation'daki st.Page ile aynı) —
+# tıklanabilir tablolardan yönlendirme için.
+_DETAY_PATH = str(Path(__file__).parent / "views" / "fon_detay.py")
+
+
+def clickable_fund_table(df: pd.DataFrame, key: str, column_config: dict | None = None,
+                         height: int | None = None) -> None:
+    """Tek-satır seçilebilir fon tablosu; bir satıra tıklanınca o fonun kodunu
+    session_state'e yazar ve Fon Detay sayfasına yönlendirir.
+
+    Tablo 'Fon Kodu' sütunu içermelidir. Streamlit dataframe seçim olayı
+    (selection_mode) 1.35+ gerektirir.
+    """
+    kwargs = {"height": height} if height is not None else {}
+    event = st.dataframe(
+        df, width="stretch", hide_index=True,
+        column_config=column_config or metric_column_config(),
+        selection_mode="single-row", on_select="rerun", key=key, **kwargs)
+    rows = getattr(getattr(event, "selection", None), "rows", []) or []
+    if rows and "Fon Kodu" in df.columns:
+        st.session_state["detay_code"] = str(df.iloc[rows[0]]["Fon Kodu"])
+        st.switch_page(_DETAY_PATH)
+
+
+def consume_detail_code() -> str | None:
+    """Fon Detay sayfası: tıklama ile gelen ön-seçili fon kodunu bir kez okur."""
+    return st.session_state.pop("detay_code", None)
 
 
 def metric_column_config() -> dict:

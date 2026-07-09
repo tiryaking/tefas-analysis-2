@@ -31,7 +31,10 @@ if scored is None or scored.empty or combined is None:
     st.stop()
 
 labels = ui.fund_label_map(scored)
-default_code = scored.nlargest(1, "Overall_Score")["Fon Kodu"].iloc[0]
+# Bir tablodan tıklanarak gelindiyse o fon ön-seçili olur; yoksa en yüksek skorlu.
+preselect = ui.consume_detail_code()
+default_code = preselect if preselect in labels \
+    else scored.nlargest(1, "Overall_Score")["Fon Kodu"].iloc[0]
 code = st.selectbox("Fon seç", sorted(labels),
                     index=sorted(labels).index(str(default_code)),
                     format_func=lambda c: labels[c])
