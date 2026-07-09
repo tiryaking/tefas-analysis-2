@@ -97,6 +97,9 @@ c_left.plotly_chart(figures.fig_growth(norm_df, benchmark=bench, benchmark_label
 fig_dd = go.Figure()
 fig_dd.add_scatter(x=tt, y=-dd, mode="lines", fill="tozeroy", name="Drawdown",
                    line=dict(color="#c0392b", width=1))
+# Sıfır referansını her zaman göster: sığ drawdown'lu fonlarda otomatik eksen
+# 0'ı kesip grafiği "asılı" gösteriyordu.
+fig_dd.update_yaxes(rangemode="tozero")
 fig_dd.update_layout(title="Sualtı / Drawdown (%)", height=380,
                      yaxis_title="Zirveye göre kayıp (%)", margin=dict(t=40, b=10))
 c_right.plotly_chart(fig_dd, width="stretch")
@@ -142,13 +145,25 @@ if "Tema" in scored.columns:
 hist = data.load_history(ft)
 if hist is not None and not hist.empty:
     fh = hist[hist["Fon Kodu"].astype(str) == code].copy()
-    if fh["Tarih"].nunique() >= 2:
+    n_snap = fh["Tarih"].nunique()
+    st.subheader("Skor Geçmişi")
+    if n_snap < 2:
+        st.info("Trend için en az 2 anlık kayıt gerekli — her `tefas run` bir kayıt "
+                "ekler; henüz yeterli geçmiş birikmedi.")
+    else:
         fh["Tarih"] = pd.to_datetime(fh["Tarih"])
-        st.subheader("Skor Geçmişi")
-        st.plotly_chart(px.line(fh.sort_values("Tarih"), x="Tarih",
-                                y=["Overall_Score", "Overall_Persentil"], markers=True)
-                        .update_layout(height=320, margin=dict(t=20, b=10),
-                                       yaxis_title="Skor / Persentil"), width="stretch")
+        fig_h = px.line(fh.sort_values("Tarih"), x="Tarih",
+                        y=["Overall_Score", "Overall_Persentil"], markers=True,
+                        labels={"value": "Skor / Persentil (0–100)", "variable": ""})
+        # 0–100 sabit eksen: skor/persentil zaten bu ölçekte; otomatik sıkıştırma
+        # tepe fonlarda sabit yüksek değeri "boş düz çizgi" gibi göstermesin.
+        fig_h.update_yaxes(range=[0, 100])
+        fig_h.update_layout(height=320, margin=dict(t=20, b=10),
+                            legend=dict(orientation="h", y=-0.2))
+        st.plotly_chart(fig_h, width="stretch")
+        st.caption(f"{n_snap} anlık kayıt · Persentil = fonun evren içindeki sıra yüzdeliği "
+                   "(100 = en tepe). Tepe fonlarda çizgiler yüksekte ve düz seyreder — bu "
+                   "istikrar demektir, veri eksikliği değil.")
 
 with st.expander("Tüm metrikler"):
     st.dataframe(row.to_frame("Değer").astype(str), width="stretch")

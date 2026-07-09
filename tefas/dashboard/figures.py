@@ -104,6 +104,15 @@ def fig_rolling(roll_ret: pd.DataFrame | None, roll_vol: pd.DataFrame | None,
     """`charts.prep_rolling` çıktısı → yuvarlanan getiri (üst) + volatilite (alt)."""
     if roll_ret is None or roll_ret.empty:
         return _empty()
+    # Isınma dead-space'ini kırp: 63-günlük pencere ilk ~63 gözlemde hesaplanamaz
+    # (baştan NaN). Grafik ilk geçerli değerden başlasın — sol üçte bir boş kalıp
+    # rf çizgisi orada uzanarak "bozuk" görünmesin.
+    valid = roll_ret.dropna(how="all")
+    if valid.empty:
+        return _empty("Yuvarlanan pencere için yeterli veri yok")
+    start = valid.index[0]
+    roll_ret = roll_ret.loc[start:]
+    roll_vol = roll_vol.loc[start:] if roll_vol is not None else roll_vol
     cmap = cmap or color_map(roll_ret.columns)
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.55, 0.45],
                         vertical_spacing=0.06,
