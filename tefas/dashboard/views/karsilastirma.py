@@ -21,7 +21,6 @@ import streamlit as st
 from tefas import charts, comparison, portfolio as pf, themes
 from tefas.dashboard import data, figures, ui
 
-st.set_page_config(page_title="Karşılaştırma", page_icon=":scales:", layout="wide")
 ft = data.sidebar_fund_type()
 st.title("Fon Karşılaştırma")
 

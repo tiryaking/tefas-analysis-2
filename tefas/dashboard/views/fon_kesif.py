@@ -14,7 +14,6 @@ import streamlit as st
 
 from tefas.dashboard import data, ui
 
-st.set_page_config(page_title="Fon Kesif", page_icon=":mag:", layout="wide")
 ft = data.sidebar_fund_type()
 st.title("Fon Keşif")
 
@@ -61,17 +60,15 @@ flt = df[mask].sort_values("Overall_Score", ascending=False)
 st.caption(f"{len(flt)} / {len(df)} fon gösteriliyor.")
 
 cols = [c for c in ["Fon Kodu", "Fon Adi", "Tema", "Overall_Score",
-                    "Conservative_Score", "Balanced_Score", "Moderate_Score", "Aggressive_Score",
                     "Yillik_Getiri", "Yillik_Volatilite", "Sharpe_Orani", "Sortino_Orani",
                     "Max_Drawdown", "VaR_95", "Reel_Getiri_1Y", "Fon_Toplam_Deger_Milyon_TL",
                     "Rf_Ustu", "Karar_Bayraklari"] if c in flt.columns]
-st.dataframe(flt[cols], width="stretch", hide_index=True, height=420,
-             column_config={"Overall_Score": st.column_config.ProgressColumn(
-                 "Skor", min_value=0, max_value=100, format="%.1f")})
+st.dataframe(flt[cols], width="stretch", hide_index=True, height=460,
+             column_config=ui.metric_column_config())
 ui.download_df(flt[cols], f"fon_kesif_{ft.lower()}.csv", key="dl_kesif")
 
-#  Risk-getiri haritasi 
-st.subheader("Risk - Getiri Haritasi")
+#  Risk-getiri haritasi
+st.subheader("Risk – Getiri Haritası")
 plot_df = flt.dropna(subset=["Yillik_Volatilite", "Yillik_Getiri"])
 if len(plot_df) >= 3:
     # PDF ile ayni mantik: eksenler 1.-99. yuzdelie kirpilir ki uc deerler haritayi ezmesin

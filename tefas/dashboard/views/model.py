@@ -18,7 +18,6 @@ import streamlit as st
 from tefas import model_config, narrative
 from tefas.dashboard import data, ui
 
-st.set_page_config(page_title="Model & Metodoloji", page_icon=":scroll:", layout="wide")
 ft = data.sidebar_fund_type()
 st.title("Model & Metodoloji")
 

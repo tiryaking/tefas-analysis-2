@@ -21,7 +21,6 @@ import streamlit as st
 from tefas import charts, config, narrative, themes
 from tefas.dashboard import data, figures, ui
 
-st.set_page_config(page_title="Fon Detay", page_icon=":microscope:", layout="wide")
 ft = data.sidebar_fund_type()
 st.title("Fon Detay")
 

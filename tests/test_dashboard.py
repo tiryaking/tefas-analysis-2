@@ -112,8 +112,9 @@ def _fixture_output(tmp_path, monkeypatch):
     return out, combined
 
 
-ALL_PAGES = ["app.py", "pages/1_Fon_Kesif.py", "pages/2_Fon_Detay.py",
-             "pages/3_Karsilastirma.py", "pages/4_Portfoy_Risk.py", "pages/5_Model.py"]
+# Router (app.py) + her view dosyası tek tek
+ALL_PAGES = ["app.py", "views/ozet.py", "views/fon_kesif.py", "views/fon_detay.py",
+             "views/karsilastirma.py", "views/portfoy_risk.py", "views/model.py"]
 
 
 @pytest.mark.parametrize("page", ALL_PAGES)
@@ -125,8 +126,9 @@ def test_pages_render(tmp_path, monkeypatch, page):
 
 
 def test_app_without_data_shows_warning(tmp_path, monkeypatch):
+    # Router boş veriyle varsayılan sayfayı (Özet) çalıştırır → uyarı çıkmalı
     monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "bos")
-    at = AppTest.from_file(str(DASH / "app.py"), default_timeout=30)
+    at = AppTest.from_file(str(DASH / "views/ozet.py"), default_timeout=30)
     at.run()
     assert not at.exception
     assert at.warning, "veri yokken uyarı bekleniyordu"
@@ -134,7 +136,7 @@ def test_app_without_data_shows_warning(tmp_path, monkeypatch):
 
 def test_comparison_page_with_two_funds(tmp_path, monkeypatch):
     _fixture_output(tmp_path, monkeypatch)
-    at = AppTest.from_file(str(DASH / "pages/3_Karsilastirma.py"), default_timeout=60)
+    at = AppTest.from_file(str(DASH / "views/karsilastirma.py"), default_timeout=60)
     at.run()
     assert not at.exception
     # multiselect varsayılanı model portföyden gelir → en az 2 fon, tablo render olur
