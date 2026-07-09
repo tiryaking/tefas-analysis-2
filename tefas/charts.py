@@ -725,26 +725,14 @@ def chart_cmp_drawdown(combined, codes, path):
     return _chart(fig, path)
 
 
-RADAR_AXES = [("Yıllık Getiri", "Yillik_Getiri", "high"), ("Sharpe", "Sharpe_Orani", "high"),
-              ("Sortino", "Sortino_Orani", "high"), ("Düşük Vol.", "Yillik_Volatilite", "low"),
-              ("Düşük DD", "Max_Drawdown", "low"), ("Poz. Gün", "Pozitif_Gun_Orani", "high")]
-
-
 def chart_cmp_radar(met, path):
-    """Çok-boyutlu göreli karşılaştırma (fonlar arası min-maks normalize spider)."""
-    labels = [a[0] for a in RADAR_AXES]
-    norm = []
-    for _, col, direction in RADAR_AXES:
-        vals = pd.to_numeric(met[col], errors="coerce").to_numpy(dtype="float64")
-        vmin, vmax = np.nanmin(vals), np.nanmax(vals)
-        if not np.isfinite(vmin) or vmax == vmin:
-            scaled = np.full(len(vals), 0.5)
-        else:
-            scaled = (vals - vmin) / (vmax - vmin)
-            if direction == "low":
-                scaled = 1.0 - scaled
-        norm.append(np.nan_to_num(scaled, nan=0.0))
-    norm = np.array(norm)
+    """Çok-boyutlu göreli karşılaştırma (fonlar arası min-maks normalize spider).
+
+    Normalizasyon `comparison.prep_radar` ile paylaşılır (dashboard radar'ı da
+    aynı çıktıyı kullanır).
+    """
+    from .comparison import prep_radar
+    labels, norm = prep_radar(met)
     angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False).tolist()
     angles += angles[:1]
     fig, ax = plt.subplots(figsize=(5.4, 4.4), subplot_kw=dict(polar=True))

@@ -33,8 +33,13 @@ from reportlab.platypus.tableofcontents import TableOfContents
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-from . import allocation, config, model_config, portfolio as pf, themes, validation
+from . import allocation, comparison, config, model_config, portfolio as pf, themes, validation
 from .themes import fund_theme  # geriye uyumluluk: report.fund_theme kullanılıyordu
+from .narrative import fmt, pct, short_name, build_rationale
+# Karşılaştırma metrik tanımları ve en-iyi seçimi artık comparison.py'de
+# (dashboard ile paylaşılır); eski özel adlar geriye uyum için korunur.
+_CMP_ROWS = comparison.CMP_METRICS
+_best_index = comparison.best_index
 from .charts import (
     FUND_PALETTE,
     price_pivot,
@@ -141,24 +146,6 @@ def _styles():
     return s
 
 
-def fmt(x, dec=2, suffix="", dash="—"):
-    if x is None or (isinstance(x, float) and (np.isnan(x) or np.isinf(x))):
-        return dash
-    try:
-        return f"{float(x):,.{dec}f}{suffix}"
-    except (ValueError, TypeError):
-        return str(x)
-
-
-def pct(x, dec=1):
-    return fmt(x, dec, "%") if pd.notna(x) else "—"
-
-
-def short_name(name, maxlen=46):
-    s = str(name)
-    return s if len(s) <= maxlen else s[: maxlen - 1] + "…"
-
-
 def _code_label(row) -> str:
     """1 yıldan kısa fiyat geçmişi olan fonları '*' ile işaretler (#1)."""
     code = str(row["Fon Kodu"])
@@ -166,37 +153,6 @@ def _code_label(row) -> str:
     if pd.notna(n) and n < config.TRADING_DAYS_PER_YEAR:
         return code + "*"
     return code
-
-
-def build_rationale(row):
-    bits = []
-    sharpe = row.get("Sharpe_Orani")
-    if pd.notna(sharpe):
-        if sharpe >= 3:
-            bits.append(f"çok güçlü risk-ayarlı getiri (Sharpe {fmt(sharpe,2)})")
-        elif sharpe >= 1:
-            bits.append(f"sağlam risk-ayarlı getiri (Sharpe {fmt(sharpe,2)})")
-    vol = row.get("Yillik_Volatilite")
-    if pd.notna(vol):
-        if vol < 5:
-            bits.append(f"çok düşük volatilite (%{fmt(vol,1)})")
-        elif vol < 15:
-            bits.append(f"düşük volatilite (%{fmt(vol,1)})")
-        elif vol >= 30:
-            bits.append(f"yüksek volatilite (%{fmt(vol,1)})")
-    dd = row.get("Max_Drawdown")
-    if pd.notna(dd) and dd < 5:
-        bits.append(f"kontrollü kayıp (Max DD %{fmt(dd,1)})")
-    ret = row.get("Yillik_Getiri")
-    if pd.notna(ret) and ret >= 60:
-        bits.append(f"yüksek yıllık getiri (%{fmt(ret,1)})")
-    aum = row.get("Fon_Toplam_Deger_Milyon_TL")
-    if pd.notna(aum) and aum >= config.AUM_BONUS_THRESHOLD:
-        bits.append("güçlü büyüklük/likidite")
-    if not bits:
-        bits.append("dengeli genel profil")
-    txt = "; ".join(bits[:3])
-    return txt[0].upper() + txt[1:] + "."
 
 
 def _make_table(headers, rows, col_widths, styles, align_right_from=2):
@@ -946,35 +902,6 @@ def generate(scored: pd.DataFrame, metrics: pd.DataFrame, fund_type: str,
 # ═════════════════════════════════════════════════════════════════════════════
 #  KARŞILAŞTIRMA MODU  —  belirli fonları yan yana kıyaslayan rapor
 # ═════════════════════════════════════════════════════════════════════════════
-
-# metrik satırı: (etiket, (sütun, yön) | None, biçimlendirici)
-_CMP_ROWS = [
-    ("Tema", None, lambda r: fund_theme(r.get("Fon Adi"))),
-    ("Yıllık Getiri", ("Yillik_Getiri", "high"), lambda r: pct(r.get("Yillik_Getiri"))),
-    ("rf Üzeri Getiri", None, lambda r: "✓" if bool(r.get("Rf_Ustu")) else "—"),
-    ("Kuruluş CAGR", ("Yillik_Getiri_Kurulus", "high"), lambda r: pct(r.get("Yillik_Getiri_Kurulus"))),
-    ("Volatilite", ("Yillik_Volatilite", "low"), lambda r: pct(r.get("Yillik_Volatilite"))),
-    ("Sharpe", ("Sharpe_Orani", "high"), lambda r: fmt(r.get("Sharpe_Orani"), 2)),
-    ("Sortino", ("Sortino_Orani", "high"), lambda r: fmt(r.get("Sortino_Orani"), 2)),
-    ("Calmar", ("Calmar_Orani", "high"), lambda r: fmt(r.get("Calmar_Orani"), 2)),
-    ("Max Drawdown", ("Max_Drawdown", "low"), lambda r: pct(r.get("Max_Drawdown"))),
-    ("VaR %95 (gün)", ("VaR_95", "high"), lambda r: pct(r.get("VaR_95"))),
-    ("CVaR %95 (gün)", ("CVaR_95", "high"), lambda r: pct(r.get("CVaR_95"))),
-    ("Pozitif Gün %", ("Pozitif_Gun_Orani", "high"), lambda r: pct(r.get("Pozitif_Gun_Orani"))),
-    ("Pozitif Ay %", ("Pozitif_Ay_Orani", "high"), lambda r: pct(r.get("Pozitif_Ay_Orani"))),
-    ("Reel Getiri", ("Reel_Getiri_1Y", "high"), lambda r: pct(r.get("Reel_Getiri_1Y"))),
-    ("AUM (mn TL)", ("Fon_Toplam_Deger_Milyon_TL", "high"), lambda r: fmt(r.get("Fon_Toplam_Deger_Milyon_TL"), 0)),
-    ("Fon Yaşı (yıl)", None, lambda r: fmt(r.get("Fon_Yasi_Yil"), 1)),
-    ("Veri (gün)", None, lambda r: fmt(r.get("Veri_Noktasi_Sayisi"), 0)),
-]
-
-
-def _best_index(met, col, direction):
-    vals = pd.to_numeric(met[col], errors="coerce")
-    if not vals.notna().any():
-        return None
-    return int(vals.idxmax() if direction == "high" else vals.idxmin())
-
 
 def generate_comparison(met: pd.DataFrame, combined: pd.DataFrame, fund_type: str,
                         risk_free_rate: float, codes: list[str],
