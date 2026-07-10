@@ -72,6 +72,10 @@ with tab_model:
                 charts.prep_growth(pivot, codes),
                 benchmark=themes.theme_median_growth(combined) if combined is not None else None,
                 title="Model Portföy Fonları — Kümülatif Büyüme (ortak dönem)"), width="stretch")
+            monthly = charts.prep_monthly_returns(pivot)
+            st.plotly_chart(figures.fig_monthly_heatmap(monthly, codes,
+                            median_label="Portföy medyanı"), width="stretch",
+                            key="model_monthly_hm")
 
 # ── Profil Önerileri (her profil kendi alt-sekmesinde, tam görsel grup) ───────
 with tab_profiles:
@@ -114,18 +118,21 @@ with tab_risk:
             if pivot is not None:
                 monthly = charts.prep_monthly_returns(pivot)
                 hm_col.plotly_chart(figures.fig_monthly_heatmap(monthly, codes,
-                                    median_label="Portföy medyanı"), width="stretch")
+                                    median_label="Portföy medyanı"), width="stretch",
+                                    key="risk_monthly_hm")
             rets = pf.returns_matrix(combined, codes)
             if rets.shape[1] >= 2:
                 corr_col.plotly_chart(figures.fig_corr_heatmap(rets.corr()), width="stretch")
 
-        # Tail-risk tablosu (ilk 12 aday) — formatlı, tam genişlik
-        st.subheader("Tail-Risk (kuyruk riski) — ilk 12 aday")
+        # Tail-risk tablosu — model portföy fonlarının risk metrikleri
+        st.subheader("Tail-Risk (kuyruk riski)")
+        model_codes = {str(p["Fon Kodu"]) for p in model}
         tr_cols = [c for c in ["Fon Kodu", "Fon Adi", "Yillik_Getiri", "Yillik_Volatilite",
-                               "VaR_95", "VaR_99", "CVaR_95", "En_Kotu_Gun", "Max_Drawdown"]
+                                "VaR_95", "VaR_99", "CVaR_95", "En_Kotu_Gun", "Max_Drawdown"]
                    if c in universe.columns]
-        tail = universe.nlargest(12, "Overall_Score")[tr_cols] if "Overall_Score" in universe.columns \
-            else universe[tr_cols].head(12)
+        tail = universe[universe["Fon Kodu"].astype(str).isin(model_codes)]
+        tail = tail.sort_values("VaR_95", ascending=True)[tr_cols] if not tail.empty and "VaR_95" in tail.columns \
+            else tail[tr_cols]
         ui.clickable_fund_table(tail, key="tail_tbl")
         ui.download_df(tail, f"tail_risk_{ft.lower()}.csv", key="dl_tail")
 
@@ -149,6 +156,10 @@ with tab_ops:
             st.plotly_chart(figures.fig_growth(
                 charts.prep_growth(pivot, top_codes),
                 title="Yeni Fırsat Fonları — Kümülatif Büyüme"), width="stretch")
+            monthly = charts.prep_monthly_returns(pivot)
+            st.plotly_chart(figures.fig_monthly_heatmap(monthly, top_codes,
+                            median_label="Evren medyanı"), width="stretch",
+                            key="ops_monthly_hm")
 
 # ── What-if Lab ────────────────────────────────────────────────────────────────
 with tab_whatif:
@@ -177,3 +188,10 @@ with tab_whatif:
             wf_risk = pf.portfolio_risk(combined, wf_model)
             if wf_risk is not None:
                 st.metric("What-if portföy volatilitesi", f"%{wf_risk['portfolio_vol']:.1f}")
+            wf_codes_list = [str(p["Fon Kodu"]) for p in wf_model]
+            pivot = data.price_pivot(ft)
+            if pivot is not None:
+                monthly = charts.prep_monthly_returns(pivot)
+                st.plotly_chart(figures.fig_monthly_heatmap(monthly, wf_codes_list,
+                                median_label="Portföy medyanı"), width="stretch",
+                                key="whatif_monthly_hm")

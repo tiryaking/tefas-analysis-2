@@ -36,9 +36,9 @@ def active_fund_codes(platform_status_path) -> set[str]:
 
 
 def _keyword_mask(series: pd.Series, keywords: list[str]) -> pd.Series:
-    mask = series.str.contains(keywords[0], case=False, na=False)
+    mask = series.str.contains(keywords[0], case=False, na=False, regex=False)
     for kw in keywords[1:]:
-        mask = mask | series.str.contains(kw, case=False, na=False)
+        mask = mask | series.str.contains(kw, case=False, na=False, regex=False)
     return mask
 
 
